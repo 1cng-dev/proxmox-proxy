@@ -7,6 +7,7 @@ const rateLimit = require("express-rate-limit");
 
 const nodesRouter = require("./routes/nodes");
 const vmsRouter = require("./routes/vms");
+const usersRouter = require("./routes/users");
 const errorHandler = require("./errorHandler");
 
 const app = express();
@@ -71,6 +72,7 @@ app.get("/health", (req, res) => {
 //   POST   /api/nodes/:node/vms/:vmid/start
 //   ... (same pattern)
 
+app.use("/api/users", usersRouter);
 app.use("/api/nodes", nodesRouter);
 
 // Default node route — uses PROXMOX_DEFAULT_NODE
@@ -103,7 +105,8 @@ app.listen(PORT, () => {
   console.log("  DEL  /api/vms/:vmid");
   console.log("  GET  /api/vms/:vmid/stats?timeframe=hour");
   console.log("  GET  /api/vms/:vmid/console");
-  console.log("  GET  /api/vms/:vmid/task/:upid\n");
+  console.log("  GET  /api/vms/:vmid/task/:upid");
+  console.log("  POST /api/users/register\n");
 });
 {
   
