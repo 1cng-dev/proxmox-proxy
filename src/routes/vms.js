@@ -17,6 +17,44 @@ router.get("/", async (req, res, next) => {
   }
 });
 
+// ─── POST /api/nodes/:node/vms ───────────────────────
+// Create a new VM
+router.post("/", async (req, res, next) => {
+  try {
+    const {
+      vmid, name, memory = 2048, cores = 2, sockets = 1,
+      ostype = "l26", iso, storage = "local-lvm", diskSize = "20G",
+      net0 = "virtio,bridge=vmbr0",
+    } = req.body;
+
+    if (!vmid) {
+      return res.status(400).json({ ok: false, error: "vmid is required" });
+    }
+
+    const payload = {
+      vmid,
+      name,
+      memory,
+      cores,
+      sockets,
+      ostype,
+      net0,
+      scsi0: `${storage}:${diskSize}`,
+      scsihw: "virtio-scsi-pci",
+      bootdisk: "scsi0",
+      ...(iso && { ide2: `${iso},media=cdrom` }),
+    };
+
+    const { data } = await proxmox.post(
+      `/nodes/${node(req)}/qemu`,
+      payload
+    );
+    res.status(201).json({ ok: true, vmid, task: data.data });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── GET /api/nodes/:node/vms/:vmid ──────────────────
 // VM config + status
 router.get("/:vmid", async (req, res, next) => {

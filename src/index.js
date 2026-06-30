@@ -8,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 const nodesRouter = require("./routes/nodes");
 const vmsRouter = require("./routes/vms");
 const usersRouter = require("./routes/users");
+const authenticate = require("./middleware/auth");
 const errorHandler = require("./errorHandler");
 
 const app = express();
@@ -73,16 +74,16 @@ app.get("/health", (req, res) => {
 //   ... (same pattern)
 
 app.use("/api/users", usersRouter);
-app.use("/api/nodes", nodesRouter);
+app.use("/api/nodes", authenticate, nodesRouter);
 
 // Default node route — uses PROXMOX_DEFAULT_NODE
-app.use("/api/vms", (req, res, next) => {
+app.use("/api/vms", authenticate, (req, res, next) => {
   req.params.node = process.env.PROXMOX_DEFAULT_NODE || "node1";
   next();
 }, vmsRouter);
 
 // Specific node route
-app.use("/api/nodes/:node/vms", vmsRouter);
+app.use("/api/nodes/:node/vms", authenticate, vmsRouter);
 
 // ─── Error Handler ────────────────────────────────────
 app.use(errorHandler);
