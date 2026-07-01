@@ -1,10 +1,177 @@
 const express = require("express");
 const router = express.Router({ mergeParams: true });
 const proxmox = require("../proxmoxClient");
+const supabase = require("../supabaseClient");
+const authorize = require("../middleware/authorize");
 
 // ─── Helper ───────────────────────────────────────────
 const node = (req) => req.params.node || process.env.PROXMOX_DEFAULT_NODE;
 const cleanVmid = (vmid) => vmid.replace(/^:/, "");
+
+// ─── POST /api/vms/request ──────────────────────────
+// Customer submits a VM request (stored in DB, status=pending)
+router.post("/request", async (req, res, next) => {
+  try {
+    const { hostname, os, cpu, ram, storage } = req.body;
+
+    if (!hostname || !os || !cpu || !ram || !storage) {
+      return res.status(400).json({
+        ok: false,
+        error: "hostname, os, cpu, ram, and storage are required",
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("vms")
+      .insert([{
+        user_id:  req.user.id,
+        hostname,
+        os,
+        cpu,
+        ram,
+        storage,
+        status:   "pending",
+      }])
+      .select("id, hostname, os, cpu, ram, storage, status, created_at")
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json({ ok: true, request: data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /api/vms/my ────────────────────────────────
+// Customer: list only their own VMs
+router.get("/my", async (req, res, next) => {
+  try {
+    const { data, error } = await supabase
+      .from("vms")
+      .select("id, hostname, os, cpu, ram, storage, status, proxmox_vmid, proxmox_node, public_ip, created_at")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ ok: true, vms: data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /api/vms/requests ───────────────────────────
+// Admin: list all VM requests with requester info
+router.get("/requests", authorize("admin"), async (req, res, next) => {
+  try {
+    const { status } = req.query;
+
+    let query = supabase
+      .from("vms")
+      .select("id, hostname, os, cpu, ram, storage, status, proxmox_vmid, proxmox_node, reject_reason, created_at, updated_at, profiles(id, name, username, email)")
+      .order("created_at", { ascending: false });
+
+    if (status) query = query.eq("status", status);
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    res.json({ ok: true, requests: data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── PATCH /api/vms/requests/:id/approve ─────────────
+// Admin: approve a pending request → create VM on Proxmox
+router.patch("/requests/:id/approve", authorize("admin"), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { vmid, proxmox_node } = req.body;
+
+    if (!vmid) {
+      return res.status(400).json({ ok: false, error: "vmid is required" });
+    }
+
+    const targetNode = proxmox_node || process.env.PROXMOX_DEFAULT_NODE;
+
+    const { data: vmRequest, error: fetchError } = await supabase
+      .from("vms")
+      .select("*")
+      .eq("id", id)
+      .eq("status", "pending")
+      .single();
+
+    if (fetchError || !vmRequest) {
+      return res.status(404).json({ ok: false, error: "pending request not found" });
+    }
+
+    const proxmoxPayload = {
+      vmid,
+      name:     vmRequest.hostname,
+      memory:   vmRequest.ram,
+      cores:    vmRequest.cpu,
+      sockets:  1,
+      ostype:   "l26",
+      net0:     "virtio,bridge=vmbr0",
+      scsi0:    `local-lvm:${vmRequest.storage}`,
+      scsihw:   "virtio-scsi-pci",
+      bootdisk: "scsi0",
+    };
+
+    const { data: proxmoxData } = await proxmox.post(
+      `/nodes/${targetNode}/qemu`,
+      proxmoxPayload
+    );
+
+    const { data: updated, error: updateError } = await supabase
+      .from("vms")
+      .update({
+        status:       "approved",
+        proxmox_vmid: vmid,
+        proxmox_node: targetNode,
+      })
+      .eq("id", id)
+      .select("id, hostname, status, proxmox_vmid, proxmox_node, updated_at")
+      .single();
+
+    if (updateError) throw updateError;
+
+    res.json({ ok: true, vm: updated, task: proxmoxData.data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── PATCH /api/vms/requests/:id/reject ──────────────
+// Admin: reject a pending request
+router.patch("/requests/:id/reject", authorize("admin"), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    const { data, error } = await supabase
+      .from("vms")
+      .update({
+        status:        "declined",
+        reject_reason: reason || null,
+      })
+      .eq("id", id)
+      .eq("status", "pending")
+      .select("id, hostname, status, reject_reason, updated_at")
+      .single();
+
+    if (error || !data) {
+      return res.status(404).json({ ok: false, error: "pending request not found" });
+    }
+
+    res.json({ ok: true, vm: data });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ─── GET /api/nodes/:node/vms ─────────────────────────
 // List all VMs in a node
