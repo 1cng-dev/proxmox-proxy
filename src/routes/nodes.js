@@ -1,9 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const proxmox = require("../proxmoxClient");
+const authenticate = require("../middleware/authenticate");
 
 // GET /api/nodes — list all nodes in cluster
-router.get("/", async (req, res, next) => {
+router.get("/", authenticate, async (req, res, next) => {
   try {
     const { data } = await proxmox.get("/nodes");
     res.json({ ok: true, data: data.data });
@@ -15,7 +16,7 @@ router.get("/", async (req, res, next) => {
 
 
 // GET /api/nodes/:node — specific node status
-router.get("/:node", async (req, res, next) => {
+router.get("/:node", authenticate, async (req, res, next) => {
   try {
     const { node } = req.params;
     const { data } = await proxmox.get(`/nodes/${node}/status`);
