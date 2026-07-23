@@ -2,6 +2,12 @@
 
 VMP Web UI + Proxmox VE + Backend Proxy Server
 
+A stateless Express proxy that authenticates to Proxmox VE with a single API
+token, hides Proxmox's raw error/URL shape behind a consistent JSON contract,
+and lets the UI address either a default node or any node in the cluster.
+For the full request-flow diagrams and design rationale, see
+[Proxcy-API ↔ Proxmox VE — Architecture & Request Flow.md](Proxcy-API%20↔%20Proxmox%20VE%20—%20Architecture%20&%20Request%20Flow.md).
+
 ## Project Structure
 
 ```
@@ -43,7 +49,25 @@ PROXMOX_TOKEN=PVEAPIToken=root@pam!YOUR_TOKEN_NAME=YOUR_TOKEN_SECRET
 PROXMOX_DEFAULT_NODE=node1
 PORT=3000
 ALLOWED_ORIGINS=http://localhost:5173,https://your-vmp-domain.com
+
+# Reserved for future client-auth (not enforced yet)
+# SUPABASE_JWT_SECRET=your_supabase_jwt_secret
 ```
+
+## Security
+
+- **`helmet`** — sets hardened default HTTP response headers.
+- **`cors`** — only origins listed in `ALLOWED_ORIGINS` may call the API
+  (falls back to `*` if unset); allowed methods are `GET`, `POST`, `DELETE`.
+- **`express-rate-limit`** — 100 requests / 60s per client; over the limit
+  returns `{ "ok": false, "error": "Too many requests" }`.
+- **Proxmox credentials never reach the client** — `PROXMOX_TOKEN` is only
+  attached server-side, in `src/proxmoxClient.js`.
+- **Self-signed TLS** — outbound requests to Proxmox VE accept self-signed
+  certificates via a dedicated HTTPS agent scoped to the Proxmox client only.
+- There is currently no inbound authentication on Proxcy itself — don't
+  expose it directly to the public internet without adding an auth layer or
+  a trusted reverse proxy in front of it.
 
 ## API Endpoints
 

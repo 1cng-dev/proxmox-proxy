@@ -105,6 +105,3 @@ app.listen(PORT, () => {
   console.log("  GET  /api/vms/:vmid/console");
   console.log("  GET  /api/vms/:vmid/task/:upid\n");
 });
-{
-  
-}
