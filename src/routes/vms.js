@@ -8,12 +8,34 @@ const requireAdmin = require("../middleware/requireAdmin");
 const auditLog = require("../middleware/auditLog");
 const vncSessions = require("../vncSessions");
 const { cleanVmid } = require("../utils/vmid");
+const { isAdminUser } = require("../utils/isAdmin");
 
 // ─── GET /api/vms (or /api/nodes/:node/vms) ───────────
-// Lists only the VMs the caller owns (per vm_ownership), not every VM on
-// the node — a node-wide listing would leak other tenants' VM IDs.
+// Customers get only the VMs they own (per vm_ownership) — a node-wide
+// listing would leak other tenants' VM IDs. Admins (per team_members) get
+// every VM on the cluster, read-only, regardless of ownership.
 router.get("/", authenticate, async (req, res, next) => {
   try {
+    if (await isAdminUser(req.user.id)) {
+      const { data } = await proxmox.get("/cluster/resources", { params: { type: "vm" } });
+      const results = (data.data || []).map((r) => ({
+        vmid: r.vmid,
+        node: r.node,
+        name: r.name,
+        status: r.status,
+        cpu: r.cpu,
+        maxcpu: r.maxcpu,
+        mem: r.mem,
+        maxmem: r.maxmem,
+        disk: r.disk,
+        maxdisk: r.maxdisk,
+        uptime: r.uptime,
+        netin: r.netin,
+        netout: r.netout,
+      }));
+      return res.json({ ok: true, scope: "all", data: results });
+    }
+
     const { data: owned, error } = await supabaseAdmin
       .from("vm_ownership")
       .select("vmid, node")
@@ -30,15 +52,16 @@ router.get("/", authenticate, async (req, res, next) => {
       )
     );
 
-    res.json({ ok: true, data: results });
+    res.json({ ok: true, scope: "owned", data: results });
   } catch (err) {
     next(err);
   }
 });
 
 // ─── GET /api/vms/:vmid ────────────────────────────────
-// VM config + status — vmid ownership enforced by authorizeVm
-router.get("/:vmid", authenticate, authorizeVm, async (req, res, next) => {
+// VM config + status — vmid ownership enforced by authorizeVm; admins bypass
+// ownership on this read-only route.
+router.get("/:vmid", authenticate, authorizeVm({ allowAdminBypass: true }), async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
     const [status, config] = await Promise.all([
@@ -60,7 +83,7 @@ router.get("/:vmid", authenticate, authorizeVm, async (req, res, next) => {
 router.post(
   "/:vmid/start",
   authenticate,
-  authorizeVm,
+  authorizeVm(),
   auditLog("start"),
   async (req, res, next) => {
     try {
@@ -80,7 +103,7 @@ router.post(
 router.post(
   "/:vmid/stop",
   authenticate,
-  authorizeVm,
+  authorizeVm(),
   auditLog("stop"),
   async (req, res, next) => {
     try {
@@ -101,7 +124,7 @@ router.post(
 router.post(
   "/:vmid/shutdown",
   authenticate,
-  authorizeVm,
+  authorizeVm(),
   auditLog("shutdown"),
   async (req, res, next) => {
     try {
@@ -121,7 +144,7 @@ router.post(
 router.post(
   "/:vmid/reboot",
   authenticate,
-  authorizeVm,
+  authorizeVm(),
   auditLog("reboot"),
   async (req, res, next) => {
     try {
@@ -144,7 +167,7 @@ router.post(
 router.delete(
   "/:vmid",
   authenticate,
-  authorizeVm,
+  authorizeVm(),
   requireAdmin,
   auditLog("delete"),
   async (req, res, next) => {
@@ -159,8 +182,8 @@ router.delete(
 );
 
 // ─── GET /api/vms/:vmid/stats ──────────────────────────
-// CPU / Memory / Disk / Network realtime stats
-router.get("/:vmid/stats", authenticate, authorizeVm, async (req, res, next) => {
+// CPU / Memory / Disk / Network realtime stats — admins bypass ownership here too.
+router.get("/:vmid/stats", authenticate, authorizeVm({ allowAdminBypass: true }), async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
     const { timeframe = "hour" } = req.query; // hour | day | week | month | year
@@ -181,7 +204,7 @@ router.get("/:vmid/stats", authenticate, authorizeVm, async (req, res, next) => 
 router.get(
   "/:vmid/console",
   authenticate,
-  authorizeVm,
+  authorizeVm(),
   auditLog("console"),
   async (req, res, next) => {
     try {
@@ -208,7 +231,7 @@ router.get(
 
 // ─── GET /api/vms/:vmid/task/:upid ─────────────────────
 // Check task status (whether start/stop task is completed)
-router.get("/:vmid/task/:upid", authenticate, authorizeVm, async (req, res, next) => {
+router.get("/:vmid/task/:upid", authenticate, authorizeVm(), async (req, res, next) => {
   try {
     const { upid } = req.params;
     const encodedUpid = encodeURIComponent(upid);

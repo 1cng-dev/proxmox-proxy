@@ -108,6 +108,14 @@ editing the URL.
 Supabase JWT to carry `app_metadata.role = "admin"` — ownership alone is not
 enough to destroy a VM.
 
+**Admin read bypass** — `GET /api/vms`, `GET /api/vms/:vmid`, and `GET
+/api/vms/:vmid/stats` let an admin through without an ownership check, so
+staff can monitor any tenant's VM. "Admin" here is looked up server-side
+against the `team_members` table (`role = 'Admin'`, `status = 'Active'`) via
+`src/utils/isAdmin.js` — not from any client-supplied JWT claim. This bypass
+is intentionally read-only: power actions, console, delete, and task-status
+still require the caller to own the VM in `vm_ownership`, admin or not.
+
 ## Security
 
 - **`helmet`** — sets hardened default HTTP response headers.
