@@ -12,6 +12,10 @@ const adminRouter = require("./routes/admin");
 const errorHandler = require("./errorHandler");
 const { handleConsoleUpgrade } = require("./wsConsoleProxy");
 const vmStatusSync = require("./jobs/syncVmStatus");
+const { assertVmCredentialKey } = require("./utils/assertEnv");
+
+// Fail loudly now, not on the first credential reveal/write in production.
+assertVmCredentialKey();
 
 const app = express();
 const PORT = process.env.PORT || 3000;

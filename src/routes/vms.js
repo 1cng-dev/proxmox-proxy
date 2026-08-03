@@ -313,7 +313,7 @@ router.get("/:vmid/task/:upid", authenticate, authorizeVm(), async (req, res, ne
 // ═════════════════════════════════════════════════════════
 
 // ─── GET /api/vms/by-record/:recordId ──────────────────
-router.get("/by-record/:recordId", authenticate, authorizeVmByRecord, async (req, res, next) => {
+router.get("/by-record/:recordId", authenticate, authorizeVmByRecord({ allowAdminBypass: true }), async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
     const [status, config] = await Promise.all([
@@ -332,7 +332,7 @@ router.get("/by-record/:recordId", authenticate, authorizeVmByRecord, async (req
 });
 
 // ─── GET /api/vms/by-record/:recordId/stats ────────────
-router.get("/by-record/:recordId/stats", authenticate, authorizeVmByRecord, async (req, res, next) => {
+router.get("/by-record/:recordId/stats", authenticate, authorizeVmByRecord({ allowAdminBypass: true }), async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
     const { timeframe = "hour" } = req.query;
@@ -354,7 +354,7 @@ router.get(
   "/by-record/:recordId/credentials",
   authenticate,
   vmActionLimiter,
-  authorizeVmByRecord,
+  authorizeVmByRecord(),
   auditLog("credentials_reveal"),
   async (req, res, next) => {
     try {
@@ -397,7 +397,7 @@ for (const action of POWER_ACTIONS) {
     `/by-record/:recordId/${action}`,
     authenticate,
     vmActionLimiter,
-    authorizeVmByRecord,
+    authorizeVmByRecord(),
     auditLog(action),
     async (req, res, next) => {
       try {
@@ -415,10 +415,17 @@ for (const action of POWER_ACTIONS) {
 }
 
 // ─── GET /api/vms/by-record/:recordId/console ──────────
+// The websocket upgrade itself is authorized by the opaque, single-use
+// sessionToken (see wsConsoleProxy.js — host/port/API token never reach the
+// client). The VNC ticket is additionally returned here because the noVNC
+// RFB handshake tunneled inside that websocket needs it as its own password
+// — the same way Proxmox's own web console works. Scope stays tight: it's
+// only returned once, to an already-authenticated, ownership-checked,
+// audit-logged caller, for the one session they just opened.
 router.get(
   "/by-record/:recordId/console",
   authenticate,
-  authorizeVmByRecord,
+  authorizeVmByRecord(),
   auditLog("console"),
   async (req, res, next) => {
     try {
@@ -441,6 +448,7 @@ router.get(
         recordId: req.params.recordId,
         sessionToken,
         wsPath: `/ws/console/${sessionToken}`,
+        ticket: ticket.ticket,
       });
     } catch (err) {
       next(err);
@@ -452,7 +460,7 @@ router.get(
 router.get(
   "/by-record/:recordId/task/:upid",
   authenticate,
-  authorizeVmByRecord,
+  authorizeVmByRecord(),
   async (req, res, next) => {
     try {
       const { upid } = req.params;

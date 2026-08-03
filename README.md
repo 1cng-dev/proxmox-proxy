@@ -169,9 +169,13 @@ read them back — rate-limited tighter than the rest of the API
   reveals and writes never log the plaintext password itself.
 - **Proxmox credentials never reach the client** — `PROXMOX_TOKEN` is only
   attached server-side, in `src/proxmoxClient.js`.
-- **Console/VNC does not leak the Proxmox host** — `GET /api/vms/:vmid/console`
-  returns an opaque `sessionToken` and `wsPath`, never the raw Proxmox
-  ticket, port, or host address (see `src/wsConsoleProxy.js`).
+- **Console/VNC does not leak the Proxmox host or port** — the console routes
+  return an opaque, single-use `sessionToken` and `wsPath`; the Proxmox host
+  and port are never sent to the client (see `src/wsConsoleProxy.js`). The
+  by-record route additionally returns the VNC `ticket` itself — required by
+  the noVNC RFB handshake tunneled inside that websocket (the same way
+  Proxmox's own web console works) — scoped to that one already-authorized
+  session, never reused.
 - **Self-signed TLS** — outbound requests to Proxmox VE accept self-signed
   certificates via a dedicated HTTPS agent scoped to the Proxmox client only.
 
