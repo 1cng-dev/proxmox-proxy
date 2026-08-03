@@ -22,17 +22,22 @@ proxmox-proxy/
 │   ├── vncSessions.js         # In-memory VNC console session store (TTL)
 │   ├── wsConsoleProxy.js      # Proxies /ws/console/:token → Proxmox vncwebsocket
 │   ├── middleware/
-│   │   ├── authenticate.js    # Verifies Supabase JWT → req.user
-│   │   ├── authorizeVm.js     # Checks vm_ownership, resolves the real node
-│   │   ├── requireAdmin.js    # Gates admin-only actions (VM destroy)
-│   │   └── auditLog.js        # Writes vm_action_audit rows
+│   │   ├── authenticate.js         # Verifies Supabase JWT → req.user
+│   │   ├── authorizeVm.js          # Ownership check keyed by the real vmid (admin/internal use)
+│   │   ├── authorizeVmByRecord.js  # Ownership check keyed by vm_ownership.id (customer-facing, hides the real vmid)
+│   │   ├── requireAdmin.js         # Gates admin-only actions (VM destroy, bindings writes)
+│   │   ├── vmActionLimiter.js      # Per-customer rate limit for power actions/credential reveals
+│   │   └── auditLog.js             # Writes vm_action_audit rows
 │   ├── jobs/
 │   │   └── syncVmStatus.js    # Cron: refreshes node/status_cache in vm_ownership
 │   ├── utils/
-│   │   └── vmid.js            # cleanVmid() shared helper
+│   │   ├── vmid.js            # cleanVmid() shared helper
+│   │   ├── isAdmin.js         # isAdminUser() — the team_members-backed admin check
+│   │   └── resolveNode.js     # Cluster-resources fallback to resolve a vmid's node
 │   └── routes/
 │       ├── nodes.js           # Node list / status
-│       └── vms.js             # VM operations
+│       ├── vms.js             # VM operations (both :vmid- and by-record-keyed)
+│       └── admin.js           # POST /api/admin/vms/:vmId/bindings
 ├── supabase/
 │   └── schema.sql             # vm_ownership + vm_action_audit tables, RLS
 ├── .env.example
@@ -51,10 +56,13 @@ cp .env.example .env
 
 # 3. Insert values in .env
 #    PROXMOX_URL, PROXMOX_TOKEN, PROXMOX_DEFAULT_NODE,
-#    SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+#    SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, VM_CREDENTIAL_KEY
 
 # 4. Apply the Supabase schema (vm_ownership, vm_action_audit, RLS)
 #    Run supabase/schema.sql against your Supabase project (SQL editor or `supabase db push`)
+#    Also apply the vmp-ui portal's own migrations under apps/portal/supabase/migrations —
+#    that's where vms_customer_safe, set_vm_password/get_vm_password, and the
+#    jwt_role() security fix live (this repo and the portal share one Supabase project).
 
 # 5. Start
 npm run dev    # development (nodemon)
@@ -85,6 +93,10 @@ SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY   # server-side only, never ship
 
 # VNC console session token TTL (seconds)
 VNC_TOKEN_TTL_SECONDS=60
+
+# Symmetric key for VM login-credential encryption — server-side only, never
+# in the database or sent to a client. Generate with `openssl rand -base64 32`.
+VM_CREDENTIAL_KEY=YOUR_LONG_RANDOM_SECRET
 ```
 
 ## Authentication & Authorization
@@ -97,24 +109,44 @@ Authorization: Bearer <supabase-access-token>
 
 Requests without a valid, non-expired Supabase JWT get `401 Unauthorized`.
 
-VM-scoped routes (anything under `/:vmid`) additionally check that the
-authenticated user owns that `vmid` in the `vm_ownership` table — if not,
-`403 Forbidden`. The `:node` segment in a URL is only used for routing to
-this proxy; the actual Proxmox call always targets the node recorded in
-`vm_ownership`, so a client cannot redirect an action to a different node by
-editing the URL.
+VM-scoped routes under `/:vmid` (admin/internal use — see below) additionally
+check that the authenticated user owns that `vmid` in the `vm_ownership`
+table — if not, `403 Forbidden`. The `:node` segment in a URL is only used
+for routing to this proxy; the actual Proxmox call always targets the node
+recorded in `vm_ownership`, so a client cannot redirect an action to a
+different node by editing the URL.
 
-`DELETE /api/vms/:vmid` (VM destroy) additionally requires the caller's
-Supabase JWT to carry `app_metadata.role = "admin"` — ownership alone is not
-enough to destroy a VM.
+**Two ways to identify a VM in a request:**
 
-**Admin read bypass** — `GET /api/vms`, `GET /api/vms/:vmid`, and `GET
-/api/vms/:vmid/stats` let an admin through without an ownership check, so
-staff can monitor any tenant's VM. "Admin" here is looked up server-side
-against the `team_members` table (`role = 'Admin'`, `status = 'Active'`) via
-`src/utils/isAdmin.js` — not from any client-supplied JWT claim. This bypass
-is intentionally read-only: power actions, console, delete, and task-status
-still require the caller to own the VM in `vm_ownership`, admin or not.
+- **`/api/vms/:vmid`** — keyed by the *real* Proxmox vmid. Admin/internal use
+  only; nothing in the portal's customer-facing UI ever sends this.
+- **`/api/vms/by-record/:recordId`** — keyed by `vm_ownership.id`, an opaque
+  UUID. This is what the customer-facing portal actually calls — the browser
+  never holds or transmits the real Proxmox vmid. `authorizeVmByRecord`
+  resolves `(vmid, node)` server-side from that UUID + the caller's
+  `user_id`, and returns `404` (never `403`) on any mismatch, so probing
+  record IDs can't even confirm one exists. Both identifier schemes support
+  the same operations: status, stats, credentials reveal, start/stop/
+  shutdown/reboot/reset/suspend/resume, console, task status.
+
+`DELETE /api/vms/:vmid` (VM destroy) and `POST /api/admin/vms/:vmId/bindings`
+(writes a VM's real vmid/node/credentials) both require the caller to be an
+admin — checked via `requireAdmin` → `isAdminUser()` against the
+`team_members` table (`role = 'Admin'`, `status = 'Active'`), never from a
+client-supplied JWT claim.
+
+**Admin read bypass** — `GET /api/vms`, `GET /api/vms/:vmid`/`by-record/:recordId`,
+and their `/stats` routes let an admin through without an ownership check
+(same `isAdminUser()` check as above), so staff can monitor any tenant's VM.
+This bypass is intentionally read-only: power actions, console, credentials,
+delete, and task-status still require the caller to own the VM in
+`vm_ownership`, admin or not.
+
+**VM login credentials** are encrypted at rest (`vms.password_encrypted`, via
+`pgp_sym_encrypt`/`pgp_sym_decrypt` and `VM_CREDENTIAL_KEY`, never the
+database). `GET /api/vms/by-record/:recordId/credentials` is the only way to
+read them back — rate-limited tighter than the rest of the API
+(`vmActionLimiter`, 20/min per customer) and audit-logged on every reveal.
 
 ## Security
 
@@ -125,10 +157,16 @@ still require the caller to own the VM in `vm_ownership`, admin or not.
   fallback.
 - **`express-rate-limit`** — 100 requests / 60s per client IP; over the limit
   returns `{ "ok": false, "error": "Too many requests" }`. This is IP-based
-  only, not per-user.
+  only, not per-user. A second, tighter limiter (`vmActionLimiter`, 20/min,
+  keyed by `req.user.id`) additionally applies to power actions and
+  credential reveals specifically, so one compromised/abusive account can't
+  hide a rapid start/stop loop or credential-scraping behind shared-IP
+  traffic (or get blocked by punishing everyone on that IP).
 - **JWT authentication + per-VM ownership authorization** — see above.
-- **Audit logging** — every start/stop/shutdown/reboot/delete/console action
-  is recorded to `vm_action_audit` with user, vmid, node, action, and result.
+- **Audit logging** — every start/stop/shutdown/reboot/reset/suspend/resume/
+  delete/console/credentials-reveal/admin-bindings-write action is recorded
+  to `vm_action_audit` with user, vmid, node, action, and result. Credential
+  reveals and writes never log the plaintext password itself.
 - **Proxmox credentials never reach the client** — `PROXMOX_TOKEN` is only
   attached server-side, in `src/proxmoxClient.js`.
 - **Console/VNC does not leak the Proxmox host** — `GET /api/vms/:vmid/console`
@@ -156,18 +194,31 @@ GET /api/nodes              → all nodes in cluster
 GET /api/nodes/:node        → status of a node
 ```
 
-### VMs (default node)
+### VMs (default node, keyed by the real vmid — admin/internal use)
 ```
-GET    /api/vms                          → VM list (caller's owned VMs only)
+GET    /api/vms                          → VM list (owned VMs only; every VM on the cluster for admins)
 GET    /api/vms/:vmid                    → VM status + config
 POST   /api/vms/:vmid/start              → VM start
 POST   /api/vms/:vmid/stop               → VM stop (force)
 POST   /api/vms/:vmid/shutdown           → VM shutdown (graceful)
 POST   /api/vms/:vmid/reboot             → VM reboot
+POST   /api/vms/:vmid/reset              → VM hard reset
+POST   /api/vms/:vmid/suspend            → VM suspend
+POST   /api/vms/:vmid/resume             → VM resume
 DELETE /api/vms/:vmid                    → VM terminate (destroy) — admin role only
 GET    /api/vms/:vmid/stats?timeframe=hour → CPU/RAM/Disk/Net stats
 GET    /api/vms/:vmid/console            → VNC session token + ws path
 GET    /api/vms/:vmid/task/:upid         → Task status check
+```
+
+### VMs (keyed by vm_ownership.id — what the customer-facing portal calls)
+```
+GET    /api/vms/by-record/:recordId
+GET    /api/vms/by-record/:recordId/stats?timeframe=hour
+GET    /api/vms/by-record/:recordId/credentials   → decrypted {username, password}, audit-logged
+POST   /api/vms/by-record/:recordId/start|stop|shutdown|reboot|reset|suspend|resume
+GET    /api/vms/by-record/:recordId/console
+GET    /api/vms/by-record/:recordId/task/:upid
 ```
 
 ### VMs (specific node)
@@ -178,9 +229,17 @@ POST /api/nodes/:node/vms/:vmid/start
 ... (same pattern)
 ```
 
+### Admin
+```
+POST /api/admin/vms/:vmId/bindings  → writes assigned_vmid/node/pmx_type/public_ip/
+                                       private_ip/username/password for a VM record
+                                       (vmId is the vms.id UUID). Encrypts password
+                                       server-side; admin role required.
+```
+
 ### Console websocket
 ```
-WS /ws/console/:sessionToken   → obtained from GET /api/vms/:vmid/console
+WS /ws/console/:sessionToken   → obtained from a .../console route above
 ```
 
 ### Stats timeframe options
@@ -223,6 +282,17 @@ curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:3000/api
 
 # Multi-node: Start VM on specific node
 curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/nodes/node1/vms/100/start
+
+# Customer-facing: status/usage/credentials/power actions by opaque record ID
+# (recordId is vm_ownership.id, not the real Proxmox vmid)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/vms/by-record/$RECORD_ID
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/vms/by-record/$RECORD_ID/credentials
+curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/vms/by-record/$RECORD_ID/reset
+
+# Admin: write a VM's real vmid/node/credentials binding
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"assigned_vmid":1001,"node":"pve1","username":"root","password":"..."}' \
+  http://localhost:3000/api/admin/vms/$VM_RECORD_UUID/bindings
 ```
 
 ## Response Format

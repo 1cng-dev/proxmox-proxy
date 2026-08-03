@@ -8,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 
 const nodesRouter = require("./routes/nodes");
 const vmsRouter = require("./routes/vms");
+const adminRouter = require("./routes/admin");
 const errorHandler = require("./errorHandler");
 const { handleConsoleUpgrade } = require("./wsConsoleProxy");
 const vmStatusSync = require("./jobs/syncVmStatus");
@@ -78,6 +79,18 @@ app.get("/health", (req, res) => {
 //   POST   /api/nodes/:node/vms/:vmid/start
 //   ... (same pattern)
 //
+// Customer-facing operations, keyed by vm_ownership.id instead of the raw
+// Proxmox vmid — see src/middleware/authorizeVmByRecord.js
+//   GET    /api/vms/by-record/:recordId
+//   GET    /api/vms/by-record/:recordId/stats
+//   GET    /api/vms/by-record/:recordId/credentials
+//   POST   /api/vms/by-record/:recordId/{start|stop|shutdown|reboot|reset|suspend|resume}
+//   GET    /api/vms/by-record/:recordId/console
+//   GET    /api/vms/by-record/:recordId/task/:upid
+//
+// Admin-only (writes the real vmid/node/credential binding for a VM record)
+//   POST   /api/admin/vms/:vmId/bindings
+//
 // Console websocket (no HTTP route — upgraded directly, see below)
 //   WS     /ws/console/:sessionToken
 
@@ -91,6 +104,8 @@ app.use("/api/vms", (req, res, next) => {
 
 // Specific node route
 app.use("/api/nodes/:node/vms", vmsRouter);
+
+app.use("/api/admin", adminRouter);
 
 // ─── Error Handler ────────────────────────────────────
 app.use(errorHandler);
@@ -126,6 +141,8 @@ server.listen(PORT, () => {
   console.log("  GET  /api/vms/:vmid/stats?timeframe=hour");
   console.log("  GET  /api/vms/:vmid/console");
   console.log("  GET  /api/vms/:vmid/task/:upid");
+  console.log("  GET  /api/vms/by-record/:recordId  (+ stats/credentials/console/task, POST power actions)");
+  console.log("  POST /api/admin/vms/:vmId/bindings  (admin role required)");
   console.log("  WS   /ws/console/:sessionToken\n");
 
   vmStatusSync.start();

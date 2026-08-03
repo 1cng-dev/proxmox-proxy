@@ -4,8 +4,10 @@ const proxmox = require("../proxmoxClient");
 const supabaseAdmin = require("../supabaseClient");
 const authenticate = require("../middleware/authenticate");
 const authorizeVm = require("../middleware/authorizeVm");
+const authorizeVmByRecord = require("../middleware/authorizeVmByRecord");
 const requireAdmin = require("../middleware/requireAdmin");
 const auditLog = require("../middleware/auditLog");
+const vmActionLimiter = require("../middleware/vmActionLimiter");
 const vncSessions = require("../vncSessions");
 const { cleanVmid } = require("../utils/vmid");
 const { isAdminUser } = require("../utils/isAdmin");
@@ -160,6 +162,67 @@ router.post(
   }
 );
 
+// ─── POST /api/vms/:vmid/reset ─────────────────────────
+// Hard reset (like pressing the reset button — no ACPI, no graceful shutdown)
+router.post(
+  "/:vmid/reset",
+  authenticate,
+  authorizeVm(),
+  auditLog("reset"),
+  async (req, res, next) => {
+    try {
+      const vmid = cleanVmid(req.params.vmid);
+      const { data } = await proxmox.post(
+        `/nodes/${req.params.node}/qemu/${vmid}/status/reset`,
+        {}
+      );
+      res.json({ ok: true, vmid, task: data.data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /api/vms/:vmid/suspend ───────────────────────
+router.post(
+  "/:vmid/suspend",
+  authenticate,
+  authorizeVm(),
+  auditLog("suspend"),
+  async (req, res, next) => {
+    try {
+      const vmid = cleanVmid(req.params.vmid);
+      const { data } = await proxmox.post(
+        `/nodes/${req.params.node}/qemu/${vmid}/status/suspend`,
+        {}
+      );
+      res.json({ ok: true, vmid, task: data.data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /api/vms/:vmid/resume ────────────────────────
+router.post(
+  "/:vmid/resume",
+  authenticate,
+  authorizeVm(),
+  auditLog("resume"),
+  async (req, res, next) => {
+    try {
+      const vmid = cleanVmid(req.params.vmid);
+      const { data } = await proxmox.post(
+        `/nodes/${req.params.node}/qemu/${vmid}/status/resume`,
+        {}
+      );
+      res.json({ ok: true, vmid, task: data.data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ─── DELETE /api/vms/:vmid ──────────────────────────────
 // Terminate (destroy) VM — destructive, admin-only. Ownership is still
 // checked (so req.params.node resolves correctly and the action is
@@ -241,5 +304,165 @@ router.get("/:vmid/task/:upid", authenticate, authorizeVm(), async (req, res, ne
     next(err);
   }
 });
+
+// ═════════════════════════════════════════════════════════
+// Customer-facing routes, keyed by vm_ownership.id (an opaque
+// UUID — req.params.recordId) instead of the raw Proxmox vmid.
+// The browser never holds or sends the real vmid for these.
+// See src/middleware/authorizeVmByRecord.js.
+// ═════════════════════════════════════════════════════════
+
+// ─── GET /api/vms/by-record/:recordId ──────────────────
+router.get("/by-record/:recordId", authenticate, authorizeVmByRecord, async (req, res, next) => {
+  try {
+    const vmid = cleanVmid(req.params.vmid);
+    const [status, config] = await Promise.all([
+      proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/status/current`),
+      proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/config`),
+    ]);
+    res.json({
+      ok: true,
+      recordId: req.params.recordId,
+      status: status.data.data,
+      config: config.data.data,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /api/vms/by-record/:recordId/stats ────────────
+router.get("/by-record/:recordId/stats", authenticate, authorizeVmByRecord, async (req, res, next) => {
+  try {
+    const vmid = cleanVmid(req.params.vmid);
+    const { timeframe = "hour" } = req.query;
+    const { data } = await proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/rrddata`, {
+      params: { timeframe, cf: "AVERAGE" },
+    });
+    res.json({ ok: true, recordId: req.params.recordId, timeframe, data: data.data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /api/vms/by-record/:recordId/credentials ──────
+// Decrypts and returns the VM's login username/password. Rate-limited (a
+// tighter, per-customer limit than the rest of the API) and audit-logged —
+// the portal's "Reveal" button promises this is logged, and now it is. Never
+// logs the plaintext password itself, only that a reveal happened.
+router.get(
+  "/by-record/:recordId/credentials",
+  authenticate,
+  vmActionLimiter,
+  authorizeVmByRecord,
+  auditLog("credentials_reveal"),
+  async (req, res, next) => {
+    try {
+      if (!process.env.VM_CREDENTIAL_KEY) {
+        const err = new Error("Credential encryption is not configured");
+        err.status = 500;
+        throw err;
+      }
+
+      const { data: vm, error: vmError } = await supabaseAdmin
+        .from("vms")
+        .select("id, username")
+        .eq("assigned_vmid", req.vmOwnership.vmid)
+        .maybeSingle();
+
+      if (vmError || !vm) {
+        const err = new Error("Not found");
+        err.status = 404;
+        throw err;
+      }
+
+      const { data: password, error: pwError } = await supabaseAdmin.rpc("get_vm_password", {
+        p_vm_id: vm.id,
+        p_key: process.env.VM_CREDENTIAL_KEY,
+      });
+
+      if (pwError) throw pwError;
+
+      res.json({ ok: true, username: vm.username || null, password: password || null });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /api/vms/by-record/:recordId/{action} ────────
+const POWER_ACTIONS = ["start", "stop", "shutdown", "reboot", "reset", "suspend", "resume"];
+for (const action of POWER_ACTIONS) {
+  router.post(
+    `/by-record/:recordId/${action}`,
+    authenticate,
+    vmActionLimiter,
+    authorizeVmByRecord,
+    auditLog(action),
+    async (req, res, next) => {
+      try {
+        const vmid = cleanVmid(req.params.vmid);
+        const { data } = await proxmox.post(
+          `/nodes/${req.params.node}/qemu/${vmid}/status/${action}`,
+          {}
+        );
+        res.json({ ok: true, recordId: req.params.recordId, task: data.data });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+}
+
+// ─── GET /api/vms/by-record/:recordId/console ──────────
+router.get(
+  "/by-record/:recordId/console",
+  authenticate,
+  authorizeVmByRecord,
+  auditLog("console"),
+  async (req, res, next) => {
+    try {
+      const vmid = cleanVmid(req.params.vmid);
+      const { data } = await proxmox.post(
+        `/nodes/${req.params.node}/qemu/${vmid}/vncproxy`,
+        { websocket: 1 }
+      );
+      const ticket = data.data;
+
+      const sessionToken = vncSessions.createSession({
+        node: req.params.node,
+        vmid,
+        port: ticket.port,
+        ticket: ticket.ticket,
+      });
+
+      res.json({
+        ok: true,
+        recordId: req.params.recordId,
+        sessionToken,
+        wsPath: `/ws/console/${sessionToken}`,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /api/vms/by-record/:recordId/task/:upid ───────
+router.get(
+  "/by-record/:recordId/task/:upid",
+  authenticate,
+  authorizeVmByRecord,
+  async (req, res, next) => {
+    try {
+      const { upid } = req.params;
+      const encodedUpid = encodeURIComponent(upid);
+      const { data } = await proxmox.get(`/nodes/${req.params.node}/tasks/${encodedUpid}/status`);
+      res.json({ ok: true, task: data.data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 module.exports = router;
