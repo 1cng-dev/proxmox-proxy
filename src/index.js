@@ -111,6 +111,19 @@ app.use("/api/nodes/:node/vms", vmsRouter);
 
 app.use("/api/admin", adminRouter);
 
+// ─── 404 (no route matched) ───────────────────────────
+// Express's own default 404 is a plain text/html page with no JSON body —
+// indistinguishable from a network failure in a browser network tab, and
+// silent in server logs. Logging here is the one diagnostic that catches a
+// stale deployment: a route that exists in source but 404s in practice
+// means the *running* process doesn't have it, and this is the only place
+// that's visible from — everything upstream of this either matched a route
+// or never got dispatched into Express's router at all.
+app.use((req, res) => {
+  console.warn(`[404] No route matched: ${req.method} ${req.originalUrl}`);
+  res.status(404).json({ ok: false, error: "Not found", path: req.originalUrl });
+});
+
 // ─── Error Handler ────────────────────────────────────
 app.use(errorHandler);
 

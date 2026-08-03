@@ -43,6 +43,20 @@ function authorizeVmByRecord({ allowAdminBypass = false } = {}) {
       const { data, error } = await query.maybeSingle();
 
       if (error || !data) {
+        // Client-facing response stays a generic 404 either way — don't leak
+        // which case it was. Server-side, distinguish them: a query error
+        // (bad UUID format, DB connectivity) looks nothing like "this
+        // customer doesn't own this record," and conflating them in logs is
+        // exactly what makes a real bug (vs. an expected ownership miss)
+        // hard to diagnose from the frontend alone.
+        if (error) {
+          console.error(`[authorizeVmByRecord] query failed for recordId=${recordId}:`, error.message);
+        } else {
+          console.warn(
+            `[authorizeVmByRecord] no matching vm_ownership row for recordId=${recordId}` +
+              (admin ? " (admin bypass — record truly doesn't exist)" : ` and user_id=${req.user.id}`)
+          );
+        }
         const err = new Error("Not found");
         err.status = 404;
         throw err;
