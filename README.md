@@ -158,6 +158,26 @@ database). `GET /api/vms/by-record/:recordId/credentials` is the only way to
 read them back — rate-limited tighter than the rest of the API
 (`vmActionLimiter`, 20/min per customer) and audit-logged on every reveal.
 
+## Background jobs
+
+**`syncVmStatus`** (`src/jobs/syncVmStatus.js`) runs every 2 minutes, pulling
+`/cluster/resources` and refreshing `vm_ownership.node`/`status_cache`. This
+endpoint does real work proportional to cluster size, so it gets its own 45s
+timeout (vs. the 15s default `proxmoxClient` uses for interactive requests)
+plus up to 3 retries with exponential backoff (2s/4s/8s) on timeouts/network
+errors/5xx — but not on 4xx (an expired/bad token won't fix itself on retry,
+so those fail immediately instead of wasting 14+ seconds). A concurrency
+guard makes overlapping runs structurally impossible (a slow/retrying run
+skips the next cron tick rather than piling up). Failure logging is throttled
+to the first failure of a new episode plus every 5th afterward, not a full
+stack trace per attempt.
+
+No monitoring/alerting system exists elsewhere in this service to wire this
+into — the minimal signal is `syncVmStatus` in the `GET /health` response
+(`running`, `consecutiveFailures`, `lastError`, `lastAttemptAt`,
+`lastSuccessAt`), for an operator or external uptime check to read without
+grepping logs.
+
 ## Security
 
 - **`helmet`** — sets hardened default HTTP response headers.

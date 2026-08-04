@@ -52,6 +52,7 @@ app.get("/health", (req, res) => {
     proxmox: process.env.PROXMOX_URL,
     defaultNode: process.env.PROXMOX_DEFAULT_NODE,
     timestamp: new Date().toISOString(),
+    syncVmStatus: vmStatusSync.getHealth(),
   });
 });
 
