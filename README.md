@@ -178,6 +178,23 @@ into — the minimal signal is `syncVmStatus` in the `GET /health` response
 `lastSuccessAt`), for an operator or external uptime check to read without
 grepping logs.
 
+## Circuit breaker
+
+`src/proxmoxClient.js` trips a circuit breaker after 3 consecutive failures
+from Proxmox (any caller — interactive routes and `syncVmStatus` share the
+same client/breaker, since they talk to the same one Proxmox host). Once
+open, every request fails immediately with a `503` (`error.circuitOpen =
+true`) instead of waiting out the full per-request timeout — this bounds the
+blast radius of a genuine Proxmox/network outage (every caller previously
+paid the full 15s, or 45s for `syncVmStatus`, on every single request during
+an outage). The circuit stays open for a 20s cooldown, then the next request
+is let through as a trial: success fully resets the breaker, failure reopens
+it for another cooldown. This is a mitigation, not a fix — it does not
+diagnose or resolve *why* Proxmox is unreachable, only stops every caller
+from independently rediscovering that fact the slow way. Current state is
+exposed at `proxmoxCircuit` in the `GET /health` response (`open`,
+`consecutiveFailures`, `lastFailureMessage`, `reopensAt`).
+
 ## Security
 
 - **`helmet`** — sets hardened default HTTP response headers.

@@ -12,6 +12,7 @@ const adminRouter = require("./routes/admin");
 const errorHandler = require("./errorHandler");
 const { handleConsoleUpgrade } = require("./wsConsoleProxy");
 const vmStatusSync = require("./jobs/syncVmStatus");
+const proxmoxClient = require("./proxmoxClient");
 const { assertVmCredentialKey } = require("./utils/assertEnv");
 
 // Fail loudly now, not on the first credential reveal/write in production.
@@ -53,6 +54,7 @@ app.get("/health", (req, res) => {
     defaultNode: process.env.PROXMOX_DEFAULT_NODE,
     timestamp: new Date().toISOString(),
     syncVmStatus: vmStatusSync.getHealth(),
+    proxmoxCircuit: proxmoxClient.getCircuitState(),
   });
 });
 
