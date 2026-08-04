@@ -85,16 +85,28 @@ router.post("/vms/:vmId/bindings", authenticate, requireVMProvisioner, async (re
       if (pwError) throw pwError;
     }
 
-    const { error: ownershipError } = await supabaseAdmin.from("vm_ownership").upsert(
-      {
-        user_id: vm.customer_id,
-        customer_id: vm.customer_id,
-        vmid,
-        node,
-        pmx_type,
-      },
-      { onConflict: "vmid" }
-    );
+    // Not using .upsert({ onConflict: "vmid" }) here: PostgREST translates
+    // that into `ON CONFLICT (vmid) ...`, which requires a UNIQUE/exclusion
+    // constraint on exactly that column set — this repo's own schema.sql
+    // reference copy and the migration actually applied to a given Supabase
+    // project have disagreed on that before (UNIQUE(node, vmid) vs.
+    // UNIQUE(vmid)), and Postgres errors ("no unique or exclusion
+    // constraint matching the ON CONFLICT specification") if what's live
+    // doesn't match what's hardcoded here. A manual find-then-write sidesteps
+    // needing to know the exact constraint shape at all. vmid is a Proxmox
+    // cluster-wide identifier in practice, so it's still the correct lookup
+    // key regardless of which constraint (if any) actually exists.
+    const { data: existingOwnership, error: findOwnershipError } = await supabaseAdmin
+      .from("vm_ownership")
+      .select("id")
+      .eq("vmid", vmid)
+      .maybeSingle();
+    if (findOwnershipError) throw findOwnershipError;
+
+    const ownershipFields = { user_id: vm.customer_id, customer_id: vm.customer_id, node, pmx_type };
+    const { error: ownershipError } = existingOwnership
+      ? await supabaseAdmin.from("vm_ownership").update(ownershipFields).eq("id", existingOwnership.id)
+      : await supabaseAdmin.from("vm_ownership").insert({ ...ownershipFields, vmid });
     if (ownershipError) throw ownershipError;
 
     // Never log the password — only that a binding was written, by whom,
