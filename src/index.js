@@ -92,7 +92,7 @@ app.get("/health", (req, res) => {
 //   GET    /api/vms/by-record/:recordId/console
 //   GET    /api/vms/by-record/:recordId/task/:upid
 //
-// Admin-only (writes the real vmid/node/credential binding for a VM record)
+// Admin or Engineer (writes the real vmid/node/credential binding for a VM record)
 //   POST   /api/admin/vms/:vmId/bindings
 //
 // Console websocket (no HTTP route — upgraded directly, see below)

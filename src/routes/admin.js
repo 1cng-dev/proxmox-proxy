@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const supabaseAdmin = require("../supabaseClient");
 const authenticate = require("../middleware/authenticate");
-const requireAdmin = require("../middleware/requireAdmin");
+const requireVMProvisioner = require("../middleware/requireVMProvisioner");
 
 // ─── POST /api/admin/vms/:vmId/bindings ────────────────
 // Writes the "Engineer Provisioning Data" for a VM record already created
@@ -13,7 +13,12 @@ const requireAdmin = require("../middleware/requireAdmin");
 // requires VM_CREDENTIAL_KEY, which lives only in this service's env and
 // must never reach the browser. Upserts vm_ownership (keyed by vmid, which
 // is unique per the schema) and updates the matching vms row.
-router.post("/vms/:vmId/bindings", authenticate, requireAdmin, async (req, res, next) => {
+//
+// Admin or Engineer — engineers are the ones actually provisioning VMs in
+// Proxmox, so they can record the result themselves. requireVMProvisioner
+// is scoped to exactly this route; every other admin-gated action in this
+// service (VM destroy, admin read-bypass) still requires Admin specifically.
+router.post("/vms/:vmId/bindings", authenticate, requireVMProvisioner, async (req, res, next) => {
   try {
     const { vmId } = req.params;
     const {
@@ -92,7 +97,9 @@ router.post("/vms/:vmId/bindings", authenticate, requireAdmin, async (req, res, 
     );
     if (ownershipError) throw ownershipError;
 
-    // Never log the password — only that a binding was written, by whom.
+    // Never log the password — only that a binding was written, by whom,
+    // and in which role (Admin or Engineer) — captured at insert time so
+    // this stays accurate even if the user's role changes later.
     await supabaseAdmin.from("vm_action_audit").insert({
       user_id: req.user.id,
       vmid,
@@ -100,6 +107,7 @@ router.post("/vms/:vmId/bindings", authenticate, requireAdmin, async (req, res, 
       action: "admin_bindings_set",
       result: "success",
       ip_address: req.ip,
+      performed_by_role: req.teamRole,
     });
 
     res.json({ ok: true, vmId, vmid, node });

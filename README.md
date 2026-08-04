@@ -25,14 +25,15 @@ proxmox-proxy/
 │   │   ├── authenticate.js         # Verifies Supabase JWT → req.user
 │   │   ├── authorizeVm.js          # Ownership check keyed by the real vmid (admin/internal use)
 │   │   ├── authorizeVmByRecord.js  # Ownership check keyed by vm_ownership.id (customer-facing, hides the real vmid)
-│   │   ├── requireAdmin.js         # Gates admin-only actions (VM destroy, bindings writes)
+│   │   ├── requireAdmin.js         # Gates admin-only actions (VM destroy)
+│   │   ├── requireVMProvisioner.js # Gates VM bindings writes (Admin or Engineer)
 │   │   ├── vmActionLimiter.js      # Per-customer rate limit for power actions/credential reveals
 │   │   └── auditLog.js             # Writes vm_action_audit rows
 │   ├── jobs/
 │   │   └── syncVmStatus.js    # Cron: refreshes node/status_cache in vm_ownership
 │   ├── utils/
 │   │   ├── vmid.js            # cleanVmid() shared helper
-│   │   ├── isAdmin.js         # isAdminUser() — the team_members-backed admin check
+│   │   ├── isAdmin.js         # getActiveTeamRole()/isAdminUser()/isVMProvisioner() — team_members-backed role checks
 │   │   └── resolveNode.js     # Cluster-resources fallback to resolve a vmid's node
 │   └── routes/
 │       ├── nodes.js           # Node list / status
@@ -129,11 +130,20 @@ different node by editing the URL.
   the same operations: status, stats, credentials reveal, start/stop/
   shutdown/reboot/reset/suspend/resume, console, task status.
 
-`DELETE /api/vms/:vmid` (VM destroy) and `POST /api/admin/vms/:vmId/bindings`
-(writes a VM's real vmid/node/credentials) both require the caller to be an
-admin — checked via `requireAdmin` → `isAdminUser()` against the
-`team_members` table (`role = 'Admin'`, `status = 'Active'`), never from a
-client-supplied JWT claim.
+`DELETE /api/vms/:vmid` (VM destroy) requires the caller to be an admin —
+checked via `requireAdmin` → `isAdminUser()` against the `team_members`
+table (`role = 'Admin'`, `status = 'Active'`), never from a client-supplied
+JWT claim.
+
+`POST /api/admin/vms/:vmId/bindings` (writes a VM's real vmid/node/
+credentials) requires Admin **or** Engineer — checked via
+`requireVMProvisioner` → `getActiveTeamRole()`, same `team_members` source
+of truth. This is deliberately narrower than a general admin/engineer role
+merge: `requireVMProvisioner` is only ever applied to this one route;
+everything else that requires Admin (VM destroy, admin read-bypass) still
+uses `requireAdmin`/`isAdminUser` unchanged. The audit row for this action
+records `performed_by_role` at insert time, so "was this bound by an admin
+or an engineer" stays answerable even if the user's role changes later.
 
 **Admin read bypass** — `GET /api/vms`, `GET /api/vms/:vmid`/`by-record/:recordId`,
 and their `/stats` routes let an admin through without an ownership check
