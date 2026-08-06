@@ -4,8 +4,6 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
-const rateLimit = require("express-rate-limit");
-
 const nodesRouter = require("./routes/nodes");
 const vmsRouter = require("./routes/vms");
 const errorHandler = require("./errorHandler");
@@ -30,14 +28,8 @@ app.use(
   })
 );
 
-// Rate Limit — max 100 requests per minute
-app.use(
-  rateLimit({
-    windowMs: 60 * 1000,
-    max: 100,
-    message: { ok: false, error: "Too many requests" },
-  })
-);
+// Rate limiting is per-route, keyed on authenticated user (see routes/vms.js,
+// routes/nodes.js). Unauthenticated /health is intentionally not throttled.
 
 // ─── Health Check ─────────────────────────────────────
 app.get("/health", (req, res) => {

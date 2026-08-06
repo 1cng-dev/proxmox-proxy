@@ -8,11 +8,14 @@ const requireAdmin = require("../middleware/requireAdmin");
 const auditLog = require("../middleware/auditLog");
 const vncSessions = require("../vncSessions");
 const { cleanVmid } = require("../utils/vmid");
+const rateLimitUser = require("../middleware/rateLimitUser");
+const vmActionCooldown = require("../middleware/vmActionCooldown");
+const checkCustomerEntitlement = require("../middleware/checkCustomerEntitlement");
 
 // ─── GET /api/vms (or /api/nodes/:node/vms) ───────────
 // Lists only the VMs the caller owns (per vm_ownership), not every VM on
 // the node — a node-wide listing would leak other tenants' VM IDs.
-router.get("/", authenticate, async (req, res, next) => {
+router.get("/", authenticate, rateLimitUser, async (req, res, next) => {
   try {
     const { data: owned, error } = await supabaseAdmin
       .from("vm_ownership")
@@ -38,7 +41,7 @@ router.get("/", authenticate, async (req, res, next) => {
 
 // ─── GET /api/vms/:vmid ────────────────────────────────
 // VM config + status — vmid ownership enforced by authorizeVm
-router.get("/:vmid", authenticate, authorizeVm, async (req, res, next) => {
+router.get("/:vmid", authenticate, rateLimitUser, authorizeVm, checkCustomerEntitlement, async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
     const [status, config] = await Promise.all([
@@ -60,7 +63,10 @@ router.get("/:vmid", authenticate, authorizeVm, async (req, res, next) => {
 router.post(
   "/:vmid/start",
   authenticate,
+  rateLimitUser,
   authorizeVm,
+  checkCustomerEntitlement,
+  vmActionCooldown(5000),
   auditLog("start"),
   async (req, res, next) => {
     try {
@@ -80,7 +86,10 @@ router.post(
 router.post(
   "/:vmid/stop",
   authenticate,
+  rateLimitUser,
   authorizeVm,
+  checkCustomerEntitlement,
+  vmActionCooldown(5000),
   auditLog("stop"),
   async (req, res, next) => {
     try {
@@ -101,7 +110,10 @@ router.post(
 router.post(
   "/:vmid/shutdown",
   authenticate,
+  rateLimitUser,
   authorizeVm,
+  checkCustomerEntitlement,
+  vmActionCooldown(5000),
   auditLog("shutdown"),
   async (req, res, next) => {
     try {
@@ -121,7 +133,10 @@ router.post(
 router.post(
   "/:vmid/reboot",
   authenticate,
+  rateLimitUser,
   authorizeVm,
+  checkCustomerEntitlement,
+  vmActionCooldown(5000),
   auditLog("reboot"),
   async (req, res, next) => {
     try {
@@ -144,6 +159,7 @@ router.post(
 router.delete(
   "/:vmid",
   authenticate,
+  rateLimitUser,
   authorizeVm,
   requireAdmin,
   auditLog("delete"),
@@ -160,7 +176,7 @@ router.delete(
 
 // ─── GET /api/vms/:vmid/stats ──────────────────────────
 // CPU / Memory / Disk / Network realtime stats
-router.get("/:vmid/stats", authenticate, authorizeVm, async (req, res, next) => {
+router.get("/:vmid/stats", authenticate, rateLimitUser, authorizeVm, checkCustomerEntitlement, async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
     const { timeframe = "hour" } = req.query; // hour | day | week | month | year
@@ -181,7 +197,10 @@ router.get("/:vmid/stats", authenticate, authorizeVm, async (req, res, next) => 
 router.get(
   "/:vmid/console",
   authenticate,
+  rateLimitUser,
   authorizeVm,
+  checkCustomerEntitlement,
+  vmActionCooldown(5000),
   auditLog("console"),
   async (req, res, next) => {
     try {
@@ -208,7 +227,7 @@ router.get(
 
 // ─── GET /api/vms/:vmid/task/:upid ─────────────────────
 // Check task status (whether start/stop task is completed)
-router.get("/:vmid/task/:upid", authenticate, authorizeVm, async (req, res, next) => {
+router.get("/:vmid/task/:upid", authenticate, rateLimitUser, authorizeVm, async (req, res, next) => {
   try {
     const { upid } = req.params;
     const encodedUpid = encodeURIComponent(upid);
