@@ -17,7 +17,7 @@ const STAFF_ROLES = ["admin", "engineer", "sales", "finance"];
 // ─── GET /api/vms (or /api/nodes/:node/vms) ───────────
 // Customers see only the VMs they own. Staff (admin, engineer, sales,
 // finance) see all VMs so they can support customers and check status.
-router.get("/", authenticate, rateLimitUser, async (req, res, next) => {
+router.get("/", authenticate, async (req, res, next) => {
   try {
     const role = req.user?.appMetadata?.role;
     const isStaff = STAFF_ROLES.includes(role);
@@ -48,7 +48,7 @@ router.get("/", authenticate, rateLimitUser, async (req, res, next) => {
 
 // ─── GET /api/vms/:vmid ────────────────────────────────
 // VM config + status — vmid ownership enforced by authorizeVm
-router.get("/:vmid", authenticate, rateLimitUser, authorizeVm, async (req, res, next) => {
+router.get("/:vmid", authenticate, authorizeVm, async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
     const [status, config] = await Promise.all([
@@ -183,7 +183,7 @@ router.delete(
 
 // ─── GET /api/vms/:vmid/stats ──────────────────────────
 // CPU / Memory / Disk / Network realtime stats
-router.get("/:vmid/stats", authenticate, rateLimitUser, authorizeVm, async (req, res, next) => {
+router.get("/:vmid/stats", authenticate, authorizeVm, async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
     const { timeframe = "hour" } = req.query; // hour | day | week | month | year
@@ -234,7 +234,7 @@ router.get(
 
 // ─── GET /api/vms/:vmid/task/:upid ─────────────────────
 // Check task status (whether start/stop task is completed)
-router.get("/:vmid/task/:upid", authenticate, rateLimitUser, authorizeVm, async (req, res, next) => {
+router.get("/:vmid/task/:upid", authenticate, authorizeVm, async (req, res, next) => {
   try {
     const { upid } = req.params;
     const encodedUpid = encodeURIComponent(upid);
