@@ -214,6 +214,7 @@ under [`docs/`](docs/), split by concern rather than in one long section
 here:
 
 - **[docs/architecture/dynamic-multi-node.md](docs/architecture/dynamic-multi-node.md)** — the full mechanism, cache/invalidation model, and API/security guarantees.
+- **[docs/architecture/architecture-diagram.html](docs/architecture/architecture-diagram.html)** — open in a browser: the full vmp-ui ↔ proxmox-proxy ↔ Supabase ↔ Proxmox VE system diagram, the resolution/self-heal flowchart, and proxmox-proxy's request pipeline in detail.
 - **[docs/testing/multi-node-testing.md](docs/testing/multi-node-testing.md)** — `npm test`, plus manual node add/remove and multi-node/multi-VM procedures.
 - **[docs/testing/vm-migration-testing.md](docs/testing/vm-migration-testing.md)** — step-by-step live-migration verification.
 - **[docs/testing/node-failure-testing.md](docs/testing/node-failure-testing.md)** — node-offline and whole-cluster-unreachable scenarios.

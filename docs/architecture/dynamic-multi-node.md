@@ -1,5 +1,12 @@
 # Dynamic multi-node & VM migration architecture
 
+> Visual companion: [architecture-diagram.html](architecture-diagram.html)
+> (open in a browser) — Fig. 1 is the full vmp-ui ↔ proxmox-proxy ↔
+> Supabase ↔ Proxmox VE system diagram, Fig. 2 is this document's
+> resolution/self-heal mechanism as a flowchart, and Fig. 3 is
+> proxmox-proxy's request pipeline in detail (the two authorization lanes,
+> `errorHandler`, the cron and websocket side lanes).
+
 ## Purpose
 
 A Proxmox cluster is dynamic on two independent axes: **which nodes exist**
