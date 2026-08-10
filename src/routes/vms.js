@@ -11,7 +11,7 @@ const vmActionLimiter = require("../middleware/vmActionLimiter");
 const vncSessions = require("../vncSessions");
 const { cleanVmid } = require("../utils/vmid");
 const { isAdminUser } = require("../utils/isAdmin");
-const { withNodeFailover } = require("../utils/nodeFailover");
+const { withNodeFailover, logVmOperation } = require("../utils/nodeFailover");
 const { nodeFromUpid } = require("../utils/upid");
 
 // ─── GET /api/vms (or /api/nodes/:node/vms) ───────────
@@ -100,6 +100,7 @@ router.post(
         proxmox.post(`/nodes/${node}/qemu/${vmid}/status/start`, {})
       );
       req.params.node = node;
+      logVmOperation(vmid, node, "start", "success");
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -120,6 +121,7 @@ router.post(
         proxmox.post(`/nodes/${node}/qemu/${vmid}/status/stop`, {})
       );
       req.params.node = node;
+      logVmOperation(vmid, node, "stop", "success");
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -141,6 +143,7 @@ router.post(
         proxmox.post(`/nodes/${node}/qemu/${vmid}/status/shutdown`, {})
       );
       req.params.node = node;
+      logVmOperation(vmid, node, "shutdown", "success");
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -161,6 +164,7 @@ router.post(
         proxmox.post(`/nodes/${node}/qemu/${vmid}/status/reboot`, {})
       );
       req.params.node = node;
+      logVmOperation(vmid, node, "reboot", "success");
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -182,6 +186,7 @@ router.post(
         proxmox.post(`/nodes/${node}/qemu/${vmid}/status/reset`, {})
       );
       req.params.node = node;
+      logVmOperation(vmid, node, "reset", "success");
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -202,6 +207,7 @@ router.post(
         proxmox.post(`/nodes/${node}/qemu/${vmid}/status/suspend`, {})
       );
       req.params.node = node;
+      logVmOperation(vmid, node, "suspend", "success");
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -222,6 +228,7 @@ router.post(
         proxmox.post(`/nodes/${node}/qemu/${vmid}/status/resume`, {})
       );
       req.params.node = node;
+      logVmOperation(vmid, node, "resume", "success");
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -246,6 +253,7 @@ router.delete(
         proxmox.delete(`/nodes/${node}/qemu/${vmid}`)
       );
       req.params.node = node;
+      logVmOperation(vmid, node, "delete", "success");
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -295,6 +303,7 @@ router.get(
         ticket: ticket.ticket,
       });
 
+      logVmOperation(vmid, node, "console", "success");
       res.json({ ok: true, vmid, sessionToken, wsPath: `/ws/console/${sessionToken}` });
     } catch (err) {
       next(err);
@@ -425,6 +434,7 @@ for (const action of POWER_ACTIONS) {
           proxmox.post(`/nodes/${node}/qemu/${vmid}/status/${action}`, {})
         );
         req.params.node = node;
+        logVmOperation(vmid, node, action, "success");
         res.json({ ok: true, recordId: req.params.recordId, task: data.data });
       } catch (err) {
         next(err);
@@ -462,6 +472,7 @@ router.get(
         ticket: ticket.ticket,
       });
 
+      logVmOperation(vmid, node, "console", "success");
       res.json({
         ok: true,
         recordId: req.params.recordId,

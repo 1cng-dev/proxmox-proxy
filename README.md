@@ -41,6 +41,15 @@ proxmox-proxy/
 │       ├── nodes.js           # Node list / status
 │       ├── vms.js             # VM operations (both :vmid- and by-record-keyed)
 │       └── admin.js           # POST /api/admin/vms/:vmId/bindings
+├── test/
+│   ├── helpers/loadNodeFailover.js  # require.cache-based mock loader (no mocking lib in this project)
+│   ├── nodeFailover.test.js   # looksLikeWrongNode / withNodeFailover behavior matrix
+│   ├── multiNodeScale.test.js # 40-VM/5-node redistribution scenario
+│   └── upid.test.js           # nodeFromUpid parsing
+├── docs/
+│   ├── architecture/dynamic-multi-node.md
+│   ├── testing/{multi-node,vm-migration,node-failure,dev-zero-validation}.md
+│   └── operations/dynamic-node-vm-operations.md
 ├── supabase/
 │   └── schema.sql             # vm_ownership + vm_action_audit tables, RLS
 ├── .env.example
@@ -67,7 +76,10 @@ cp .env.example .env
 #    that's where vms_customer_safe, set_vm_password/get_vm_password, and the
 #    jwt_role() security fix live (this repo and the portal share one Supabase project).
 
-# 5. Start
+# 5. Run the automated tests (Node's built-in test runner, no extra install)
+npm test
+
+# 6. Start
 npm run dev    # development (nodemon)
 npm start      # production
 ```
@@ -185,157 +197,34 @@ grepping logs.
 
 ## Multi-node & VM migration handling
 
-A Proxmox cluster is dynamic on two axes, independently of anything this
-service does: which nodes exist (an operator can add or remove a node at any
-time), and which node a given vmid currently runs on (Proxmox — or its own HA
-manager — can live-migrate a VM to a different node at any time, for any
-reason, including all VMs on a node at once if that node goes down). Nothing
-in this service assumes a fixed topology or a fixed vmid→node mapping:
+This service treats the Proxmox cluster's node topology and every VM's
+current node as fully dynamic — nodes can be added/removed, and any VM can
+migrate to any node at any time (HA failover or manual). Nothing here
+assumes a fixed topology or a fixed vmid→node mapping. In short: node
+listing and cluster-wide VM discovery are always live Proxmox calls, never
+cached; per-VM routing uses a 2-minute cache (`vm_ownership.node`) that
+self-heals per-request via `utils/nodeFailover.js`'s `withNodeFailover()`
+whenever a request detects it's stale, instead of waiting out the rest of
+the sync cycle; and task-status lookups don't use the cache at all, since a
+Proxmox UPID encodes its own node exactly.
 
-- **`GET /api/nodes`** and the admin, cluster-wide `GET /api/vms` listing call
-  Proxmox's own `/nodes` and `/cluster/resources` endpoints directly on every
-  request — there's no cached node list or node count anywhere, so a node
-  being added or removed shows up on the very next request with no code
-  change or restart needed.
-- **Per-VM routing** (every `:vmid`/`by-record/:recordId` route — status,
-  stats, power actions, console, delete) is keyed off `vm_ownership.node`,
-  which is a *cache*: written once when a VM is bound
-  (`POST /api/admin/vms/:vmId/bindings`) and refreshed cluster-wide every 2
-  minutes by `syncVmStatus` (see above). A VM that migrates in between those
-  refreshes has a stale cached node for up to that window — previously, any
-  action request in that window would fail outright with whatever error
-  Proxmox gives for "this vmid isn't on this node," and stay broken until the
-  next sync tick corrected it.
-- **`utils/nodeFailover.js`'s `withNodeFailover()`** closes that window per
-  request instead of waiting on the clock: every per-VM route now runs its
-  Proxmox call through it. On success, nothing changes. If the call fails
-  with Proxmox's specific "config file not found on this node" signature
-  (`utils/nodeFailover.js`'s `looksLikeWrongNode()` — distinct from a
-  permission error, timeout, or a vmid that doesn't exist anywhere), it
-  re-resolves the vmid's real current node from a live `/cluster/resources`
-  call (`utils/resolveNode.js`, the same lookup `syncVmStatus` and the
-  admin-bypass-with-no-ownership-row path already used), retries the original
-  call once against the corrected node, and — on that retry succeeding —
-  writes the corrected node back to `vm_ownership` immediately, so every other
-  in-flight or subsequent request for that vmid is right away, not after the
-  next cron tick. This is retried exactly once and only for that one specific
-  failure signature; any other error (auth, permission, a vmid that's really
-  gone) is rethrown unchanged, un-retried.
-- **Task-status routes** (`GET .../task/:upid`) don't use `vm_ownership.node`
-  or the failover above at all — a Proxmox UPID encodes the node a task ran
-  on directly in its own string (`UPID:{node}:...`, parsed by
-  `utils/upid.js`'s `nodeFromUpid()`), which is exact by construction and
-  can't go stale, so there's nothing to guess or retry there.
-- **Audit logging stays accurate through a failover.** Each route updates
-  `req.params.node` to the corrected node before responding, so
-  `auditLog` (which reads `req.params.node` at response time — see
-  `middleware/auditLog.js`) records the node the action actually ran on, not
-  the stale one the request started with.
+Full design, the three distinct failure classes (migrated / not found /
+unreachable), and the complete testing guide (automated + manual) now live
+under [`docs/`](docs/), split by concern rather than in one long section
+here:
 
-**What this doesn't cover, by design:** a vmid that's been destroyed or
-truly doesn't exist on the cluster still fails normally (`looksLikeWrongNode`
-plus a `resolveNodeForVmid` miss falls straight through to the original
-error) — this is a migration-detection mechanism, not a general-purpose
-retry-everything layer.
+- **[docs/architecture/dynamic-multi-node.md](docs/architecture/dynamic-multi-node.md)** — the full mechanism, cache/invalidation model, and API/security guarantees.
+- **[docs/testing/multi-node-testing.md](docs/testing/multi-node-testing.md)** — `npm test`, plus manual node add/remove and multi-node/multi-VM procedures.
+- **[docs/testing/vm-migration-testing.md](docs/testing/vm-migration-testing.md)** — step-by-step live-migration verification.
+- **[docs/testing/node-failure-testing.md](docs/testing/node-failure-testing.md)** — node-offline and whole-cluster-unreachable scenarios.
+- **[docs/testing/dev-zero-validation.md](docs/testing/dev-zero-validation.md)** — pre/post-deploy checklist for the `dev-zero` environment.
+- **[docs/operations/dynamic-node-vm-operations.md](docs/operations/dynamic-node-vm-operations.md)** — on-call reference for what each new log line/error means.
 
-### Testing this
-
-There's no automated test framework in this project (`package.json` has no
-test runner or test script) — the checks below are meant to be run by hand,
-in increasing order of how much real infrastructure they need.
-
-**1. Pure-logic checks — no Proxmox, no Supabase, no network.** Verify
-`looksLikeWrongNode()` and `nodeFromUpid()` classify things correctly in
-isolation:
-
-```bash
-cd proxmox-proxy
-SUPABASE_URL=https://example.supabase.co SUPABASE_SERVICE_ROLE_KEY=test node -e '
-const { looksLikeWrongNode } = require("./src/utils/nodeFailover.js");
-const { nodeFromUpid } = require("./src/utils/upid.js");
-
-console.log(looksLikeWrongNode({ status: 500, message: "Configuration file '\''nodes/old/qemu/100.conf'\'' does not exist" })); // true
-console.log(looksLikeWrongNode({ status: 403, message: "Forbidden" })); // false
-console.log(nodeFromUpid("UPID:pve2:00001234:0002ABCD:6614A1B2:qmstart:100:user@pve:")); // "pve2"
-console.log(nodeFromUpid("not-a-upid")); // null
-'
-```
-
-(`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` are only set here because
-`nodeFailover.js` requires `supabaseClient.js` at load time, which throws if
-they're missing — no real Supabase project is contacted by this check.)
-
-**2. Failover retry + self-heal, with Proxmox and Supabase mocked.** Confirms
-the actual retry-once-and-self-heal sequence, without needing a live cluster:
-
-```bash
-cd proxmox-proxy
-SUPABASE_URL=https://example.supabase.co SUPABASE_SERVICE_ROLE_KEY=test node -e '
-const path = require("path");
-const Module = require("module");
-
-// Stand in for supabaseClient.js so the self-heal write is observable instead
-// of hitting a real database.
-const supaPath = path.resolve("./src/supabaseClient.js");
-let updateCalls = [];
-require.cache[supaPath] = { id: supaPath, filename: supaPath, loaded: true, exports: {
-  from: () => ({ update: (fields) => ({ eq: (col, val) => { updateCalls.push({ fields, col, val }); return Promise.resolve({ error: null }); } }) }),
-}};
-
-// Stand in for resolveNode.js so no live /cluster/resources call is needed.
-const resolvePath = path.resolve("./src/utils/resolveNode.js");
-require.cache[resolvePath] = { id: resolvePath, filename: resolvePath, loaded: true, exports: { resolveNodeForVmid: async () => "pve3" } };
-
-const { withNodeFailover } = require("./src/utils/nodeFailover.js");
-
-(async () => {
-  const calls = [];
-  const { node, result } = await withNodeFailover(200, "pve1", async (n) => {
-    calls.push(n);
-    if (n === "pve1") { const e = new Error("Configuration file '\''nodes/pve1/qemu/200.conf'\'' does not exist"); e.status = 500; throw e; }
-    return "ok";
-  });
-  console.log("resolved node:", node);       // expect "pve3"
-  console.log("call sequence:", calls);      // expect ["pve1", "pve3"] — one retry, not a loop
-  console.log("self-heal write:", updateCalls); // expect one vm_ownership update to node "pve3"
-})();
-'
-```
-
-**3. Manual end-to-end, against a real multi-node cluster.** Needs a Proxmox
-cluster with at least 2 nodes and a test VM already bound via
-`vm_ownership`.
-
-1. Confirm the VM's current cached node:
-   `select node from vm_ownership where vmid = <test-vmid>;`
-2. Migrate the VM to a *different* node — either through the Proxmox web UI
-   (Datacenter → node → VM → Migrate) or `qm migrate <vmid> <target-node>` on
-   the source node.
-3. **Immediately** (before the next `syncVmStatus` tick — within ~2 minutes,
-   sooner the better) call a status or power-action route through this
-   service for that VM, e.g.
-   `curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/vms/<vmid>`.
-4. Expect: the request still succeeds (no error, no manual DB fix needed),
-   and this service's logs show
-   `[nodeFailover] vmid=<vmid> not on cached node "<old>" ... — retrying on "<new>"`
-   followed by
-   `[nodeFailover] self-healed vm_ownership.node for vmid=<vmid>: "<old>" -> "<new>"`.
-5. Re-check `vm_ownership.node` in the database — it should already read the
-   new node, not the old one, without waiting for the next cron tick.
-6. Repeat step 3 for a power action (e.g. `.../reboot`) and its
-   `.../task/:upid` route — confirm the task-status call succeeds too (this
-   one uses the UPID's own embedded node, not the cache, so it should work
-   regardless of exactly when the migration happened relative to the poll).
-
-**4. Simulating "stale node" without waiting for a real migration.** If you
-don't want to trigger an actual live migration, you can fake the same
-condition directly: manually set `vm_ownership.node` to any *other* real node
-name in the cluster that the VM is *not* currently on
-(`update vm_ownership set node = '<wrong-node>' where vmid = <test-vmid>;`),
-then call any status/power-action route for that vmid. This reproduces
-exactly the error Proxmox would give after a real migration and exercises
-the same failover/self-heal path as step 3 above, without touching the VM's
-actual running state.
+Automated tests (`npm test`, Node's built-in test runner — no new
+dependency) cover the retry/self-heal logic, all three failure
+classifications, and the 40-VM-across-5-nodes redistribution scenario
+without needing a live cluster; see the testing doc above for what each
+file covers and how to run them.
 
 ## Circuit breaker
 
