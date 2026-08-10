@@ -14,12 +14,8 @@ async function checkCustomerEntitlement(req, res, next) {
       supabaseAdmin.from("vm_ownership").select("id", { count: "exact" }).eq("customer_id", customerId),
     ]);
 
-    const blockedStatuses = ["suspended", "inactive"];
-    if (
-      !customer ||
-      blockedStatuses.includes(customer.status?.toString().toLowerCase())
-    ) {
-      const err = new Error("Customer account inactive or suspended");
+    if (!customer) {
+      const err = new Error("Customer not found");
       err.status = 403;
       throw err;
     }
