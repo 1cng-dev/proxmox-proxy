@@ -11,6 +11,8 @@ const vmActionLimiter = require("../middleware/vmActionLimiter");
 const vncSessions = require("../vncSessions");
 const { cleanVmid } = require("../utils/vmid");
 const { isAdminUser } = require("../utils/isAdmin");
+const { withNodeFailover } = require("../utils/nodeFailover");
+const { nodeFromUpid } = require("../utils/upid");
 
 // ─── GET /api/vms (or /api/nodes/:node/vms) ───────────
 // Customers get only the VMs they own (per vm_ownership) — a node-wide
@@ -47,9 +49,10 @@ router.get("/", authenticate, async (req, res, next) => {
 
     const results = await Promise.all(
       (owned || []).map((o) =>
-        proxmox
-          .get(`/nodes/${o.node}/qemu/${o.vmid}/status/current`)
-          .then((r) => ({ vmid: o.vmid, node: o.node, ...r.data.data }))
+        withNodeFailover(o.vmid, o.node, (node) =>
+          proxmox.get(`/nodes/${node}/qemu/${o.vmid}/status/current`)
+        )
+          .then(({ node, result }) => ({ vmid: o.vmid, node, ...result.data.data }))
           .catch(() => ({ vmid: o.vmid, node: o.node, status: "unknown" }))
       )
     );
@@ -66,10 +69,13 @@ router.get("/", authenticate, async (req, res, next) => {
 router.get("/:vmid", authenticate, authorizeVm({ allowAdminBypass: true }), async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
-    const [status, config] = await Promise.all([
-      proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/status/current`),
-      proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/config`),
-    ]);
+    const { node, result: [status, config] } = await withNodeFailover(vmid, req.params.node, (node) =>
+      Promise.all([
+        proxmox.get(`/nodes/${node}/qemu/${vmid}/status/current`),
+        proxmox.get(`/nodes/${node}/qemu/${vmid}/config`),
+      ])
+    );
+    req.params.node = node;
     res.json({
       ok: true,
       vmid,
@@ -90,10 +96,10 @@ router.post(
   async (req, res, next) => {
     try {
       const vmid = cleanVmid(req.params.vmid);
-      const { data } = await proxmox.post(
-        `/nodes/${req.params.node}/qemu/${vmid}/status/start`,
-        {}
+      const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+        proxmox.post(`/nodes/${node}/qemu/${vmid}/status/start`, {})
       );
+      req.params.node = node;
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -110,10 +116,10 @@ router.post(
   async (req, res, next) => {
     try {
       const vmid = cleanVmid(req.params.vmid);
-      const { data } = await proxmox.post(
-        `/nodes/${req.params.node}/qemu/${vmid}/status/stop`,
-        {}
+      const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+        proxmox.post(`/nodes/${node}/qemu/${vmid}/status/stop`, {})
       );
+      req.params.node = node;
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -131,10 +137,10 @@ router.post(
   async (req, res, next) => {
     try {
       const vmid = cleanVmid(req.params.vmid);
-      const { data } = await proxmox.post(
-        `/nodes/${req.params.node}/qemu/${vmid}/status/shutdown`,
-        {}
+      const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+        proxmox.post(`/nodes/${node}/qemu/${vmid}/status/shutdown`, {})
       );
+      req.params.node = node;
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -151,10 +157,10 @@ router.post(
   async (req, res, next) => {
     try {
       const vmid = cleanVmid(req.params.vmid);
-      const { data } = await proxmox.post(
-        `/nodes/${req.params.node}/qemu/${vmid}/status/reboot`,
-        {}
+      const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+        proxmox.post(`/nodes/${node}/qemu/${vmid}/status/reboot`, {})
       );
+      req.params.node = node;
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -172,10 +178,10 @@ router.post(
   async (req, res, next) => {
     try {
       const vmid = cleanVmid(req.params.vmid);
-      const { data } = await proxmox.post(
-        `/nodes/${req.params.node}/qemu/${vmid}/status/reset`,
-        {}
+      const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+        proxmox.post(`/nodes/${node}/qemu/${vmid}/status/reset`, {})
       );
+      req.params.node = node;
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -192,10 +198,10 @@ router.post(
   async (req, res, next) => {
     try {
       const vmid = cleanVmid(req.params.vmid);
-      const { data } = await proxmox.post(
-        `/nodes/${req.params.node}/qemu/${vmid}/status/suspend`,
-        {}
+      const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+        proxmox.post(`/nodes/${node}/qemu/${vmid}/status/suspend`, {})
       );
+      req.params.node = node;
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -212,10 +218,10 @@ router.post(
   async (req, res, next) => {
     try {
       const vmid = cleanVmid(req.params.vmid);
-      const { data } = await proxmox.post(
-        `/nodes/${req.params.node}/qemu/${vmid}/status/resume`,
-        {}
+      const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+        proxmox.post(`/nodes/${node}/qemu/${vmid}/status/resume`, {})
       );
+      req.params.node = node;
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -236,7 +242,10 @@ router.delete(
   async (req, res, next) => {
     try {
       const vmid = cleanVmid(req.params.vmid);
-      const { data } = await proxmox.delete(`/nodes/${req.params.node}/qemu/${vmid}`);
+      const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+        proxmox.delete(`/nodes/${node}/qemu/${vmid}`)
+      );
+      req.params.node = node;
       res.json({ ok: true, vmid, task: data.data });
     } catch (err) {
       next(err);
@@ -250,9 +259,10 @@ router.get("/:vmid/stats", authenticate, authorizeVm({ allowAdminBypass: true })
   try {
     const vmid = cleanVmid(req.params.vmid);
     const { timeframe = "hour" } = req.query; // hour | day | week | month | year
-    const { data } = await proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/rrddata`, {
-      params: { timeframe, cf: "AVERAGE" },
-    });
+    const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+      proxmox.get(`/nodes/${node}/qemu/${vmid}/rrddata`, { params: { timeframe, cf: "AVERAGE" } })
+    );
+    req.params.node = node;
     res.json({ ok: true, vmid, timeframe, data: data.data });
   } catch (err) {
     next(err);
@@ -272,14 +282,14 @@ router.get(
   async (req, res, next) => {
     try {
       const vmid = cleanVmid(req.params.vmid);
-      const { data } = await proxmox.post(
-        `/nodes/${req.params.node}/qemu/${vmid}/vncproxy`,
-        { websocket: 1 }
+      const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+        proxmox.post(`/nodes/${node}/qemu/${vmid}/vncproxy`, { websocket: 1 })
       );
+      req.params.node = node;
       const ticket = data.data;
 
       const sessionToken = vncSessions.createSession({
-        node: req.params.node,
+        node,
         vmid,
         port: ticket.port,
         ticket: ticket.ticket,
@@ -293,12 +303,17 @@ router.get(
 );
 
 // ─── GET /api/vms/:vmid/task/:upid ─────────────────────
-// Check task status (whether start/stop task is completed)
+// Check task status (whether start/stop task is completed). The UPID itself
+// encodes the node the task ran on (see utils/upid.js) — more precise than
+// vm_ownership.node, which tracks where the VM lives *now*, not where this
+// particular already-launched task ran. Falls back to req.params.node only
+// if the upid is malformed and doesn't parse.
 router.get("/:vmid/task/:upid", authenticate, authorizeVm(), async (req, res, next) => {
   try {
     const { upid } = req.params;
+    const node = nodeFromUpid(upid) || req.params.node;
     const encodedUpid = encodeURIComponent(upid);
-    const { data } = await proxmox.get(`/nodes/${req.params.node}/tasks/${encodedUpid}/status`);
+    const { data } = await proxmox.get(`/nodes/${node}/tasks/${encodedUpid}/status`);
     res.json({ ok: true, task: data.data });
   } catch (err) {
     next(err);
@@ -316,10 +331,13 @@ router.get("/:vmid/task/:upid", authenticate, authorizeVm(), async (req, res, ne
 router.get("/by-record/:recordId", authenticate, authorizeVmByRecord({ allowAdminBypass: true }), async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
-    const [status, config] = await Promise.all([
-      proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/status/current`),
-      proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/config`),
-    ]);
+    const { node, result: [status, config] } = await withNodeFailover(vmid, req.params.node, (node) =>
+      Promise.all([
+        proxmox.get(`/nodes/${node}/qemu/${vmid}/status/current`),
+        proxmox.get(`/nodes/${node}/qemu/${vmid}/config`),
+      ])
+    );
+    req.params.node = node;
     res.json({
       ok: true,
       recordId: req.params.recordId,
@@ -336,9 +354,10 @@ router.get("/by-record/:recordId/stats", authenticate, authorizeVmByRecord({ all
   try {
     const vmid = cleanVmid(req.params.vmid);
     const { timeframe = "hour" } = req.query;
-    const { data } = await proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/rrddata`, {
-      params: { timeframe, cf: "AVERAGE" },
-    });
+    const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+      proxmox.get(`/nodes/${node}/qemu/${vmid}/rrddata`, { params: { timeframe, cf: "AVERAGE" } })
+    );
+    req.params.node = node;
     res.json({ ok: true, recordId: req.params.recordId, timeframe, data: data.data });
   } catch (err) {
     next(err);
@@ -402,10 +421,10 @@ for (const action of POWER_ACTIONS) {
     async (req, res, next) => {
       try {
         const vmid = cleanVmid(req.params.vmid);
-        const { data } = await proxmox.post(
-          `/nodes/${req.params.node}/qemu/${vmid}/status/${action}`,
-          {}
+        const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+          proxmox.post(`/nodes/${node}/qemu/${vmid}/status/${action}`, {})
         );
+        req.params.node = node;
         res.json({ ok: true, recordId: req.params.recordId, task: data.data });
       } catch (err) {
         next(err);
@@ -430,14 +449,14 @@ router.get(
   async (req, res, next) => {
     try {
       const vmid = cleanVmid(req.params.vmid);
-      const { data } = await proxmox.post(
-        `/nodes/${req.params.node}/qemu/${vmid}/vncproxy`,
-        { websocket: 1 }
+      const { node, result: { data } } = await withNodeFailover(vmid, req.params.node, (node) =>
+        proxmox.post(`/nodes/${node}/qemu/${vmid}/vncproxy`, { websocket: 1 })
       );
+      req.params.node = node;
       const ticket = data.data;
 
       const sessionToken = vncSessions.createSession({
-        node: req.params.node,
+        node,
         vmid,
         port: ticket.port,
         ticket: ticket.ticket,
@@ -457,6 +476,8 @@ router.get(
 );
 
 // ─── GET /api/vms/by-record/:recordId/task/:upid ───────
+// See the :vmid-keyed task route above — node comes from the UPID itself,
+// not vm_ownership.node, since that's exact and this is only ever a guess.
 router.get(
   "/by-record/:recordId/task/:upid",
   authenticate,
@@ -464,8 +485,9 @@ router.get(
   async (req, res, next) => {
     try {
       const { upid } = req.params;
+      const node = nodeFromUpid(upid) || req.params.node;
       const encodedUpid = encodeURIComponent(upid);
-      const { data } = await proxmox.get(`/nodes/${req.params.node}/tasks/${encodedUpid}/status`);
+      const { data } = await proxmox.get(`/nodes/${node}/tasks/${encodedUpid}/status`);
       res.json({ ok: true, task: data.data });
     } catch (err) {
       next(err);

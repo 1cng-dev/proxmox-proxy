@@ -88,10 +88,17 @@ proxmoxClient.interceptors.response.use(
 
     const status = err.response?.status || 500;
     const proxmoxData = err.response?.data;
+    // Proxmox reports "wrong node for this vmid" (e.g. right after a live
+    // migration) via its HTTP reason phrase — e.g. "Configuration file
+    // 'nodes/oldnode/qemu/100.conf' does not exist" — with an empty JSON
+    // body, so statusText is often the only place that detail survives.
+    // Preserved on the thrown error below for utils/nodeFailover.js to detect.
+    const statusText = err.response?.statusText || null;
     const message =
       proxmoxData?.errors ||
       proxmoxData?.message ||
-      (typeof proxmoxData === 'string' ? proxmoxData : null) ||
+      (typeof proxmoxData === 'string' && proxmoxData ? proxmoxData : null) ||
+      statusText ||
       err.message ||
       "Proxmox connection failed";
 
@@ -113,6 +120,7 @@ proxmoxClient.interceptors.response.use(
 
     const error = new Error(message);
     error.status = status;
+    error.proxmoxStatusText = statusText;
     throw error;
   }
 );

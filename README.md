@@ -34,7 +34,9 @@ proxmox-proxy/
 │   ├── utils/
 │   │   ├── vmid.js            # cleanVmid() shared helper
 │   │   ├── isAdmin.js         # getActiveTeamRole()/isAdminUser()/isVMProvisioner() — team_members-backed role checks
-│   │   └── resolveNode.js     # Cluster-resources fallback to resolve a vmid's node
+│   │   ├── resolveNode.js     # Cluster-resources lookup to resolve a vmid's current node
+│   │   ├── nodeFailover.js    # withNodeFailover() — retries a Proxmox call on the right node after a migration, self-heals vm_ownership
+│   │   └── upid.js            # nodeFromUpid() — the node a task ran on, parsed from the UPID itself
 │   └── routes/
 │       ├── nodes.js           # Node list / status
 │       ├── vms.js             # VM operations (both :vmid- and by-record-keyed)
@@ -115,7 +117,10 @@ check that the authenticated user owns that `vmid` in the `vm_ownership`
 table — if not, `403 Forbidden`. The `:node` segment in a URL is only used
 for routing to this proxy; the actual Proxmox call always targets the node
 recorded in `vm_ownership`, so a client cannot redirect an action to a
-different node by editing the URL.
+different node by editing the URL. That recorded node is a cache, not a live
+lookup — see [Multi-node & VM migration handling](#multi-node--vm-migration-handling)
+for how a request still succeeds if the VM has moved since the cache was last
+refreshed.
 
 **Two ways to identify a VM in a request:**
 
@@ -177,6 +182,160 @@ into — the minimal signal is `syncVmStatus` in the `GET /health` response
 (`running`, `consecutiveFailures`, `lastError`, `lastAttemptAt`,
 `lastSuccessAt`), for an operator or external uptime check to read without
 grepping logs.
+
+## Multi-node & VM migration handling
+
+A Proxmox cluster is dynamic on two axes, independently of anything this
+service does: which nodes exist (an operator can add or remove a node at any
+time), and which node a given vmid currently runs on (Proxmox — or its own HA
+manager — can live-migrate a VM to a different node at any time, for any
+reason, including all VMs on a node at once if that node goes down). Nothing
+in this service assumes a fixed topology or a fixed vmid→node mapping:
+
+- **`GET /api/nodes`** and the admin, cluster-wide `GET /api/vms` listing call
+  Proxmox's own `/nodes` and `/cluster/resources` endpoints directly on every
+  request — there's no cached node list or node count anywhere, so a node
+  being added or removed shows up on the very next request with no code
+  change or restart needed.
+- **Per-VM routing** (every `:vmid`/`by-record/:recordId` route — status,
+  stats, power actions, console, delete) is keyed off `vm_ownership.node`,
+  which is a *cache*: written once when a VM is bound
+  (`POST /api/admin/vms/:vmId/bindings`) and refreshed cluster-wide every 2
+  minutes by `syncVmStatus` (see above). A VM that migrates in between those
+  refreshes has a stale cached node for up to that window — previously, any
+  action request in that window would fail outright with whatever error
+  Proxmox gives for "this vmid isn't on this node," and stay broken until the
+  next sync tick corrected it.
+- **`utils/nodeFailover.js`'s `withNodeFailover()`** closes that window per
+  request instead of waiting on the clock: every per-VM route now runs its
+  Proxmox call through it. On success, nothing changes. If the call fails
+  with Proxmox's specific "config file not found on this node" signature
+  (`utils/nodeFailover.js`'s `looksLikeWrongNode()` — distinct from a
+  permission error, timeout, or a vmid that doesn't exist anywhere), it
+  re-resolves the vmid's real current node from a live `/cluster/resources`
+  call (`utils/resolveNode.js`, the same lookup `syncVmStatus` and the
+  admin-bypass-with-no-ownership-row path already used), retries the original
+  call once against the corrected node, and — on that retry succeeding —
+  writes the corrected node back to `vm_ownership` immediately, so every other
+  in-flight or subsequent request for that vmid is right away, not after the
+  next cron tick. This is retried exactly once and only for that one specific
+  failure signature; any other error (auth, permission, a vmid that's really
+  gone) is rethrown unchanged, un-retried.
+- **Task-status routes** (`GET .../task/:upid`) don't use `vm_ownership.node`
+  or the failover above at all — a Proxmox UPID encodes the node a task ran
+  on directly in its own string (`UPID:{node}:...`, parsed by
+  `utils/upid.js`'s `nodeFromUpid()`), which is exact by construction and
+  can't go stale, so there's nothing to guess or retry there.
+- **Audit logging stays accurate through a failover.** Each route updates
+  `req.params.node` to the corrected node before responding, so
+  `auditLog` (which reads `req.params.node` at response time — see
+  `middleware/auditLog.js`) records the node the action actually ran on, not
+  the stale one the request started with.
+
+**What this doesn't cover, by design:** a vmid that's been destroyed or
+truly doesn't exist on the cluster still fails normally (`looksLikeWrongNode`
+plus a `resolveNodeForVmid` miss falls straight through to the original
+error) — this is a migration-detection mechanism, not a general-purpose
+retry-everything layer.
+
+### Testing this
+
+There's no automated test framework in this project (`package.json` has no
+test runner or test script) — the checks below are meant to be run by hand,
+in increasing order of how much real infrastructure they need.
+
+**1. Pure-logic checks — no Proxmox, no Supabase, no network.** Verify
+`looksLikeWrongNode()` and `nodeFromUpid()` classify things correctly in
+isolation:
+
+```bash
+cd proxmox-proxy
+SUPABASE_URL=https://example.supabase.co SUPABASE_SERVICE_ROLE_KEY=test node -e '
+const { looksLikeWrongNode } = require("./src/utils/nodeFailover.js");
+const { nodeFromUpid } = require("./src/utils/upid.js");
+
+console.log(looksLikeWrongNode({ status: 500, message: "Configuration file '\''nodes/old/qemu/100.conf'\'' does not exist" })); // true
+console.log(looksLikeWrongNode({ status: 403, message: "Forbidden" })); // false
+console.log(nodeFromUpid("UPID:pve2:00001234:0002ABCD:6614A1B2:qmstart:100:user@pve:")); // "pve2"
+console.log(nodeFromUpid("not-a-upid")); // null
+'
+```
+
+(`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` are only set here because
+`nodeFailover.js` requires `supabaseClient.js` at load time, which throws if
+they're missing — no real Supabase project is contacted by this check.)
+
+**2. Failover retry + self-heal, with Proxmox and Supabase mocked.** Confirms
+the actual retry-once-and-self-heal sequence, without needing a live cluster:
+
+```bash
+cd proxmox-proxy
+SUPABASE_URL=https://example.supabase.co SUPABASE_SERVICE_ROLE_KEY=test node -e '
+const path = require("path");
+const Module = require("module");
+
+// Stand in for supabaseClient.js so the self-heal write is observable instead
+// of hitting a real database.
+const supaPath = path.resolve("./src/supabaseClient.js");
+let updateCalls = [];
+require.cache[supaPath] = { id: supaPath, filename: supaPath, loaded: true, exports: {
+  from: () => ({ update: (fields) => ({ eq: (col, val) => { updateCalls.push({ fields, col, val }); return Promise.resolve({ error: null }); } }) }),
+}};
+
+// Stand in for resolveNode.js so no live /cluster/resources call is needed.
+const resolvePath = path.resolve("./src/utils/resolveNode.js");
+require.cache[resolvePath] = { id: resolvePath, filename: resolvePath, loaded: true, exports: { resolveNodeForVmid: async () => "pve3" } };
+
+const { withNodeFailover } = require("./src/utils/nodeFailover.js");
+
+(async () => {
+  const calls = [];
+  const { node, result } = await withNodeFailover(200, "pve1", async (n) => {
+    calls.push(n);
+    if (n === "pve1") { const e = new Error("Configuration file '\''nodes/pve1/qemu/200.conf'\'' does not exist"); e.status = 500; throw e; }
+    return "ok";
+  });
+  console.log("resolved node:", node);       // expect "pve3"
+  console.log("call sequence:", calls);      // expect ["pve1", "pve3"] — one retry, not a loop
+  console.log("self-heal write:", updateCalls); // expect one vm_ownership update to node "pve3"
+})();
+'
+```
+
+**3. Manual end-to-end, against a real multi-node cluster.** Needs a Proxmox
+cluster with at least 2 nodes and a test VM already bound via
+`vm_ownership`.
+
+1. Confirm the VM's current cached node:
+   `select node from vm_ownership where vmid = <test-vmid>;`
+2. Migrate the VM to a *different* node — either through the Proxmox web UI
+   (Datacenter → node → VM → Migrate) or `qm migrate <vmid> <target-node>` on
+   the source node.
+3. **Immediately** (before the next `syncVmStatus` tick — within ~2 minutes,
+   sooner the better) call a status or power-action route through this
+   service for that VM, e.g.
+   `curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/vms/<vmid>`.
+4. Expect: the request still succeeds (no error, no manual DB fix needed),
+   and this service's logs show
+   `[nodeFailover] vmid=<vmid> not on cached node "<old>" ... — retrying on "<new>"`
+   followed by
+   `[nodeFailover] self-healed vm_ownership.node for vmid=<vmid>: "<old>" -> "<new>"`.
+5. Re-check `vm_ownership.node` in the database — it should already read the
+   new node, not the old one, without waiting for the next cron tick.
+6. Repeat step 3 for a power action (e.g. `.../reboot`) and its
+   `.../task/:upid` route — confirm the task-status call succeeds too (this
+   one uses the UPID's own embedded node, not the cache, so it should work
+   regardless of exactly when the migration happened relative to the poll).
+
+**4. Simulating "stale node" without waiting for a real migration.** If you
+don't want to trigger an actual live migration, you can fake the same
+condition directly: manually set `vm_ownership.node` to any *other* real node
+name in the cluster that the VM is *not* currently on
+(`update vm_ownership set node = '<wrong-node>' where vmid = <test-vmid>;`),
+then call any status/power-action route for that vmid. This reproduces
+exactly the error Proxmox would give after a real migration and exercises
+the same failover/self-heal path as step 3 above, without touching the VM's
+actual running state.
 
 ## Circuit breaker
 
