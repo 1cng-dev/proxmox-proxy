@@ -3,6 +3,15 @@ const { cleanVmid } = require("../utils/vmid");
 
 const STAFF_ROLES = ["admin", "engineer", "sales", "finance"];
 
+function getUserRole(user) {
+  const role =
+    user?.appMetadata?.role ??
+    user?.app_metadata?.role ??
+    user?.userMetadata?.role ??
+    user?.user_metadata?.role;
+  return role?.toString().toLowerCase();
+}
+
 // Must run after authenticate. Confirms req.user owns :vmid via the
 // vm_ownership table, then overwrites req.params.node with the DB's record —
 // a client-supplied node in the URL is never trusted for the actual
@@ -19,7 +28,7 @@ async function authorizeVm(req, res, next) {
       throw err;
     }
 
-    const role = req.user?.appMetadata?.role;
+    const role = getUserRole(req.user);
     const isStaff = STAFF_ROLES.includes(role);
     const isRead = req.method === "GET" || req.method === "HEAD";
 

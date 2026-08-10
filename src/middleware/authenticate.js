@@ -24,6 +24,7 @@ async function authenticate(req, res, next) {
       id: data.user.id,
       email: data.user.email,
       appMetadata: data.user.app_metadata || {},
+      userMetadata: data.user.user_metadata || {},
     };
     next();
   } catch (err) {
