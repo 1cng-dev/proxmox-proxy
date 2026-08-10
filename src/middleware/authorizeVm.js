@@ -34,27 +34,35 @@ async function authorizeVm(req, res, next) {
 
     const { data, error } = await query.single();
 
-    if (error || !data) {
-      Promise.resolve(
-        supabaseAdmin.from("vm_action_audit").insert({
-          user_id: req.user?.id || null,
-          vmid,
-          node: req.params.node || null,
-          action: "authorize-failed",
-          result: "denied",
-          ip_address: req.ip,
-        })
-      ).catch(() => {});
-
-      const err = new Error("Forbidden");
-      err.status = 403;
-      throw err;
+    if (data) {
+      req.params.vmid = String(vmid);
+      req.params.node = data.node;
+      req.vmOwnership = data;
+      return next();
     }
 
-    req.params.vmid = String(vmid);
-    req.params.node = data.node;
-    req.vmOwnership = data;
-    next();
+    if (isStaff && isRead) {
+      // Staff can view any VM by vmid without owning it. If the VM is not
+      // tracked in vm_ownership, fall back to the URL/default node.
+      req.params.vmid = String(vmid);
+      req.vmOwnership = { vmid: String(vmid), node: req.params.node };
+      return next();
+    }
+
+    Promise.resolve(
+      supabaseAdmin.from("vm_action_audit").insert({
+        user_id: req.user?.id || null,
+        vmid,
+        node: req.params.node || null,
+        action: "authorize-failed",
+        result: "denied",
+        ip_address: req.ip,
+      })
+    ).catch(() => {});
+
+    const err = new Error("Forbidden");
+    err.status = 403;
+    throw err;
   } catch (err) {
     next(err);
   }
