@@ -4,6 +4,7 @@ const proxmox = require("../proxmoxClient");
 const supabaseAdmin = require("../supabaseClient");
 const authenticate = require("../middleware/authenticate");
 const authorizeVm = require("../middleware/authorizeVm");
+const authorizeByRecord = require("../middleware/authorizeVm").authorizeByRecord;
 const requireAdmin = require("../middleware/requireAdmin");
 const auditLog = require("../middleware/auditLog");
 const vncSessions = require("../vncSessions");
@@ -244,5 +245,120 @@ router.get("/:vmid/task/:upid", authenticate, authorizeVm, async (req, res, next
     next(err);
   }
 });
+
+// ─── GET /api/vms/by-record/:recordId ──────────────────
+// Same as GET /api/vms/:vmid but keyed by vm_ownership.id.
+// Customers must own the record; staff may view on GET.
+router.get("/by-record/:recordId", authenticate, authorizeByRecord, async (req, res, next) => {
+  try {
+    const vmid = cleanVmid(req.params.vmid);
+    const [status, config] = await Promise.all([
+      proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/status/current`),
+      proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/config`),
+    ]);
+    res.json({
+      ok: true,
+      vmid,
+      status: status.data.data,
+      config: config.data.data,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /api/vms/by-record/:recordId/stats ────────────
+router.get("/by-record/:recordId/stats", authenticate, authorizeByRecord, async (req, res, next) => {
+  try {
+    const vmid = cleanVmid(req.params.vmid);
+    const { timeframe = "hour" } = req.query;
+    const { data } = await proxmox.get(`/nodes/${req.params.node}/qemu/${vmid}/rrddata`, {
+      params: { timeframe, cf: "AVERAGE" },
+    });
+    res.json({ ok: true, vmid, timeframe, data: data.data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /api/vms/by-record/:recordId/start ───────────
+router.post(
+  "/by-record/:recordId/start",
+  authenticate,
+  rateLimitUser,
+  authorizeByRecord,
+  checkCustomerEntitlement,
+  vmActionCooldown(5000),
+  auditLog("start"),
+  async (req, res, next) => {
+    try {
+      const vmid = cleanVmid(req.params.vmid);
+      const { data } = await proxmox.post(`/nodes/${req.params.node}/qemu/${vmid}/status/start`, {});
+      res.json({ ok: true, vmid, task: data.data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /api/vms/by-record/:recordId/stop ────────────
+router.post(
+  "/by-record/:recordId/stop",
+  authenticate,
+  rateLimitUser,
+  authorizeByRecord,
+  checkCustomerEntitlement,
+  vmActionCooldown(5000),
+  auditLog("stop"),
+  async (req, res, next) => {
+    try {
+      const vmid = cleanVmid(req.params.vmid);
+      const { data } = await proxmox.post(`/nodes/${req.params.node}/qemu/${vmid}/status/stop`, {});
+      res.json({ ok: true, vmid, task: data.data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /api/vms/by-record/:recordId/shutdown ────────
+router.post(
+  "/by-record/:recordId/shutdown",
+  authenticate,
+  rateLimitUser,
+  authorizeByRecord,
+  checkCustomerEntitlement,
+  vmActionCooldown(5000),
+  auditLog("shutdown"),
+  async (req, res, next) => {
+    try {
+      const vmid = cleanVmid(req.params.vmid);
+      const { data } = await proxmox.post(`/nodes/${req.params.node}/qemu/${vmid}/status/shutdown`, {});
+      res.json({ ok: true, vmid, task: data.data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /api/vms/by-record/:recordId/reboot ──────────
+router.post(
+  "/by-record/:recordId/reboot",
+  authenticate,
+  rateLimitUser,
+  authorizeByRecord,
+  checkCustomerEntitlement,
+  vmActionCooldown(5000),
+  auditLog("reboot"),
+  async (req, res, next) => {
+    try {
+      const vmid = cleanVmid(req.params.vmid);
+      const { data } = await proxmox.post(`/nodes/${req.params.node}/qemu/${vmid}/status/reboot`, {});
+      res.json({ ok: true, vmid, task: data.data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 module.exports = router;

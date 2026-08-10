@@ -18,6 +18,57 @@ function getUserRole(user) {
 // Proxmox call, only used for routing to this middleware.
 // Staff roles (admin, engineer, sales, finance) may view any VM on GET/HEAD
 // without owning it, but power actions and deletes still require ownership.
+async function authorizeByRecord(req, res, next) {
+  try {
+    const recordId = req.params.recordId;
+
+    if (!recordId) {
+      const err = new Error("Invalid record id");
+      err.status = 400;
+      throw err;
+    }
+
+    const role = getUserRole(req.user);
+    const isStaff = STAFF_ROLES.includes(role);
+    const isRead = req.method === "GET" || req.method === "HEAD";
+
+    let query = supabaseAdmin
+      .from("vm_ownership")
+      .select("id, vmid, node, customer_id")
+      .eq("id", recordId);
+
+    if (!isStaff || !isRead) {
+      query = query.eq("user_id", req.user.id);
+    }
+
+    const { data, error } = await query.single();
+
+    if (error || !data) {
+      Promise.resolve(
+        supabaseAdmin.from("vm_action_audit").insert({
+          user_id: req.user?.id || null,
+          vmid: null,
+          node: req.params.node || null,
+          action: "authorize-by-record-failed",
+          result: "denied",
+          ip_address: req.ip,
+        })
+      ).catch(() => {});
+
+      const err = new Error("Forbidden");
+      err.status = 403;
+      throw err;
+    }
+
+    req.params.vmid = String(data.vmid);
+    req.params.node = data.node;
+    req.vmOwnership = data;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function authorizeVm(req, res, next) {
   try {
     const vmid = parseInt(cleanVmid(req.params.vmid), 10);
@@ -78,3 +129,4 @@ async function authorizeVm(req, res, next) {
 }
 
 module.exports = authorizeVm;
+module.exports.authorizeByRecord = authorizeByRecord;
