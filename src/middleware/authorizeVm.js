@@ -1,10 +1,14 @@
 const supabaseAdmin = require("../supabaseClient");
 const { cleanVmid } = require("../utils/vmid");
 
+const STAFF_ROLES = ["admin", "engineer", "sales", "finance"];
+
 // Must run after authenticate. Confirms req.user owns :vmid via the
 // vm_ownership table, then overwrites req.params.node with the DB's record —
 // a client-supplied node in the URL is never trusted for the actual
 // Proxmox call, only used for routing to this middleware.
+// Staff roles (admin, engineer, sales, finance) may view any VM on GET/HEAD
+// without owning it, but power actions and deletes still require ownership.
 async function authorizeVm(req, res, next) {
   try {
     const vmid = parseInt(cleanVmid(req.params.vmid), 10);
@@ -15,12 +19,20 @@ async function authorizeVm(req, res, next) {
       throw err;
     }
 
-    const { data, error } = await supabaseAdmin
+    const role = req.user?.appMetadata?.role;
+    const isStaff = STAFF_ROLES.includes(role);
+    const isRead = req.method === "GET" || req.method === "HEAD";
+
+    let query = supabaseAdmin
       .from("vm_ownership")
       .select("vmid, node, customer_id")
-      .eq("user_id", req.user.id)
-      .eq("vmid", vmid)
-      .single();
+      .eq("vmid", vmid);
+
+    if (!isStaff || !isRead) {
+      query = query.eq("user_id", req.user.id);
+    }
+
+    const { data, error } = await query.single();
 
     if (error || !data) {
       supabaseAdmin

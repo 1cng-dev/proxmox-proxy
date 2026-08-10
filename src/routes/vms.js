@@ -12,15 +12,22 @@ const rateLimitUser = require("../middleware/rateLimitUser");
 const vmActionCooldown = require("../middleware/vmActionCooldown");
 const checkCustomerEntitlement = require("../middleware/checkCustomerEntitlement");
 
+const STAFF_ROLES = ["admin", "engineer", "sales", "finance"];
+
 // ─── GET /api/vms (or /api/nodes/:node/vms) ───────────
-// Lists only the VMs the caller owns (per vm_ownership), not every VM on
-// the node — a node-wide listing would leak other tenants' VM IDs.
+// Customers see only the VMs they own. Staff (admin, engineer, sales,
+// finance) see all VMs so they can support customers and check status.
 router.get("/", authenticate, rateLimitUser, async (req, res, next) => {
   try {
-    const { data: owned, error } = await supabaseAdmin
-      .from("vm_ownership")
-      .select("vmid, node")
-      .eq("user_id", req.user.id);
+    const role = req.user?.appMetadata?.role;
+    const isStaff = STAFF_ROLES.includes(role);
+
+    let query = supabaseAdmin.from("vm_ownership").select("vmid, node");
+    if (!isStaff) {
+      query = query.eq("user_id", req.user.id);
+    }
+
+    const { data: owned, error } = await query;
 
     if (error) throw error;
 
@@ -41,7 +48,7 @@ router.get("/", authenticate, rateLimitUser, async (req, res, next) => {
 
 // ─── GET /api/vms/:vmid ────────────────────────────────
 // VM config + status — vmid ownership enforced by authorizeVm
-router.get("/:vmid", authenticate, rateLimitUser, authorizeVm, checkCustomerEntitlement, async (req, res, next) => {
+router.get("/:vmid", authenticate, rateLimitUser, authorizeVm, async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
     const [status, config] = await Promise.all([
@@ -176,7 +183,7 @@ router.delete(
 
 // ─── GET /api/vms/:vmid/stats ──────────────────────────
 // CPU / Memory / Disk / Network realtime stats
-router.get("/:vmid/stats", authenticate, rateLimitUser, authorizeVm, checkCustomerEntitlement, async (req, res, next) => {
+router.get("/:vmid/stats", authenticate, rateLimitUser, authorizeVm, async (req, res, next) => {
   try {
     const vmid = cleanVmid(req.params.vmid);
     const { timeframe = "hour" } = req.query; // hour | day | week | month | year
