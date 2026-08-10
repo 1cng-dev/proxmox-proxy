@@ -35,9 +35,8 @@ async function authorizeVm(req, res, next) {
     const { data, error } = await query.single();
 
     if (error || !data) {
-      supabaseAdmin
-        .from("vm_action_audit")
-        .insert({
+      Promise.resolve(
+        supabaseAdmin.from("vm_action_audit").insert({
           user_id: req.user?.id || null,
           vmid,
           node: req.params.node || null,
@@ -45,7 +44,7 @@ async function authorizeVm(req, res, next) {
           result: "denied",
           ip_address: req.ip,
         })
-        .catch(() => {});
+      ).catch(() => {});
 
       const err = new Error("Forbidden");
       err.status = 403;

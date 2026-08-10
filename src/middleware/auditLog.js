@@ -9,9 +9,8 @@ function auditLog(action) {
     const originalJson = res.json.bind(res);
 
     res.json = (body) => {
-      supabaseAdmin
-        .from("vm_action_audit")
-        .insert({
+      Promise.resolve(
+        supabaseAdmin.from("vm_action_audit").insert({
           user_id: req.user?.id || null,
           vmid: parseInt(cleanVmid(req.params.vmid || "0"), 10),
           node: req.params.node || null,
@@ -19,6 +18,7 @@ function auditLog(action) {
           result: body?.ok ? "success" : "error",
           ip_address: req.ip,
         })
+      )
         .then(({ error }) => {
           if (error) console.error("[auditLog] insert failed", error);
         })
