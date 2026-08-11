@@ -1,131 +1,72 @@
 const supabaseAdmin = require("../supabaseClient");
 const { cleanVmid } = require("../utils/vmid");
-
-const STAFF_ROLES = ["admin", "engineer", "sales", "finance"];
-
-function getUserRole(user) {
-  const role =
-    user?.appMetadata?.role ??
-    user?.app_metadata?.role ??
-    user?.userMetadata?.role ??
-    user?.user_metadata?.role;
-  return role?.toString().toLowerCase();
-}
+const { isAdminUser } = require("../utils/isAdmin");
+const { resolveNodeForVmid } = require("../utils/resolveNode");
 
 // Must run after authenticate. Confirms req.user owns :vmid via the
 // vm_ownership table, then overwrites req.params.node with the DB's record —
 // a client-supplied node in the URL is never trusted for the actual
 // Proxmox call, only used for routing to this middleware.
-// Staff roles (admin, engineer, sales, finance) may view any VM on GET/HEAD
-// without owning it, but power actions and deletes still require ownership.
-async function authorizeByRecord(req, res, next) {
-  try {
-    const recordId = req.params.recordId;
+//
+// authorizeVm({ allowAdminBypass: true }) additionally lets a caller who is an
+// admin per team_members (role='Admin', status='Active') through regardless of
+// ownership — reserved for read-only status/list routes. Power actions,
+// console, and delete always call authorizeVm() (default false) and stay
+// ownership-only even for admins.
+function authorizeVm({ allowAdminBypass = false } = {}) {
+  return async function authorizeVmMiddleware(req, res, next) {
+    try {
+      const vmid = parseInt(cleanVmid(req.params.vmid), 10);
 
-    if (!recordId) {
-      const err = new Error("Invalid record id");
-      err.status = 400;
-      throw err;
-    }
+      if (!Number.isInteger(vmid)) {
+        const err = new Error("Invalid vmid");
+        err.status = 400;
+        throw err;
+      }
 
-    const role = getUserRole(req.user);
-    const isStaff = STAFF_ROLES.includes(role);
-    const isRead = req.method === "GET" || req.method === "HEAD";
+      if (allowAdminBypass && (await isAdminUser(req.user.id))) {
+        const { data: anyOwnership } = await supabaseAdmin
+          .from("vm_ownership")
+          .select("vmid, node, customer_id")
+          .eq("vmid", vmid)
+          .maybeSingle();
 
-    let query = supabaseAdmin
-      .from("vm_ownership")
-      .select("id, vmid, node, customer_id")
-      .eq("id", recordId);
+        const node = anyOwnership?.node || (await resolveNodeForVmid(vmid));
 
-    if (!isStaff || !isRead) {
-      query = query.eq("user_id", req.user.id);
-    }
+        if (!node) {
+          const err = new Error("VM not found");
+          err.status = 404;
+          throw err;
+        }
 
-    const { data, error } = await query.single();
+        req.params.vmid = String(vmid);
+        req.params.node = node;
+        req.vmOwnership = anyOwnership || null;
+        req.isAdmin = true;
+        return next();
+      }
 
-    if (error || !data) {
-      Promise.resolve(
-        supabaseAdmin.from("vm_action_audit").insert({
-          user_id: req.user?.id || null,
-          vmid: null,
-          node: req.params.node || null,
-          action: "authorize-by-record-failed",
-          result: "denied",
-          ip_address: req.ip,
-        })
-      ).catch(() => {});
+      const { data, error } = await supabaseAdmin
+        .from("vm_ownership")
+        .select("vmid, node, customer_id")
+        .eq("user_id", req.user.id)
+        .eq("vmid", vmid)
+        .single();
 
-      const err = new Error("Forbidden");
-      err.status = 403;
-      throw err;
-    }
+      if (error || !data) {
+        const err = new Error("Forbidden");
+        err.status = 403;
+        throw err;
+      }
 
-    req.params.vmid = String(data.vmid);
-    req.params.node = data.node;
-    req.vmOwnership = data;
-    next();
-  } catch (err) {
-    next(err);
-  }
-}
-
-async function authorizeVm(req, res, next) {
-  try {
-    const vmid = parseInt(cleanVmid(req.params.vmid), 10);
-
-    if (!Number.isInteger(vmid)) {
-      const err = new Error("Invalid vmid");
-      err.status = 400;
-      throw err;
-    }
-
-    const role = getUserRole(req.user);
-    const isStaff = STAFF_ROLES.includes(role);
-    const isRead = req.method === "GET" || req.method === "HEAD";
-
-    let query = supabaseAdmin
-      .from("vm_ownership")
-      .select("vmid, node, customer_id")
-      .eq("vmid", vmid);
-
-    if (!isStaff || !isRead) {
-      query = query.eq("user_id", req.user.id);
-    }
-
-    const { data, error } = await query.single();
-
-    if (data) {
       req.params.vmid = String(vmid);
       req.params.node = data.node;
       req.vmOwnership = data;
-      return next();
+      next();
+    } catch (err) {
+      next(err);
     }
-
-    if (isStaff && isRead) {
-      // Staff can view any VM by vmid without owning it. If the VM is not
-      // tracked in vm_ownership, fall back to the URL/default node.
-      req.params.vmid = String(vmid);
-      req.vmOwnership = { vmid: String(vmid), node: req.params.node };
-      return next();
-    }
-
-    Promise.resolve(
-      supabaseAdmin.from("vm_action_audit").insert({
-        user_id: req.user?.id || null,
-        vmid,
-        node: req.params.node || null,
-        action: "authorize-failed",
-        result: "denied",
-        ip_address: req.ip,
-      })
-    ).catch(() => {});
-
-    const err = new Error("Forbidden");
-    err.status = 403;
-    throw err;
-  } catch (err) {
-    next(err);
-  }
+  };
 }
 
 module.exports = authorizeVm;

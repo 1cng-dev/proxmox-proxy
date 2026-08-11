@@ -6,25 +6,15 @@ const authenticate = require("../middleware/authenticate");
 const rateLimitUser = require("../middleware/rateLimitUser");
 const requireAdmin = require("../middleware/requireAdmin");
 
-// GET /api/nodes — list only the nodes the caller has at least one VM on,
-// unless the caller is an admin. Prevents cross-tenant cluster topology leaks.
-router.get("/", authenticate, rateLimitUser, async (req, res, next) => {
+// GET /api/nodes — list all nodes in cluster. Always a live call to Proxmox's
+// own /nodes endpoint, never a cached or hard-coded list — a node being added
+// or removed on the cluster shows up here on the very next request with no
+// restart or code change needed.
+router.get("/", authenticate, async (req, res, next) => {
   try {
-    const isAdmin = req.user?.appMetadata?.role === "admin";
-
-    if (isAdmin) {
-      const { data } = await proxmox.get("/nodes");
-      return res.json({ ok: true, data: data.data });
-    }
-
-    const { data: owned, error } = await supabaseAdmin
-      .from("vm_ownership")
-      .select("node")
-      .eq("user_id", req.user.id);
-
-    if (error) throw error;
-
-    const nodes = [...new Set((owned || []).map((o) => o.node))];
+    const { data } = await proxmox.get("/nodes");
+    const nodes = data.data || [];
+    console.log(`[NODE-DISCOVERY] nodes=${nodes.map((n) => n.node).join(",") || "(none)"}`);
     res.json({ ok: true, data: nodes });
   } catch (err) {
     next(err);

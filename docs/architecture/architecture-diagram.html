@@ -1,0 +1,759 @@
+<title>vmp-ui × proxmox-proxy — full architecture</title>
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --surface-2: #ebeef2;
+    --ink: #131a22;
+    --ink-2: #3c4753;
+    --ink-3: #6b7684;
+    --line: #d7dde3;
+    --line-2: #c2cad2;
+    --accent-live: #0f8f8a;
+    --accent-live-soft: #e3f4f2;
+    --accent-cache: #b5720a;
+    --accent-cache-soft: #fbf0dc;
+    --accent-auth: #5b4bc4;
+    --accent-auth-soft: #ece9fa;
+    --good: #1c8a53;
+    --good-soft: #e2f5ea;
+    --bad: #b3372e;
+    --bad-soft: #fbe8e6;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Menlo", "Consolas", monospace;
+    --sans: ui-sans-serif, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0f14;
+      --surface: #121821;
+      --surface-2: #1a222d;
+      --ink: #e7ecf1;
+      --ink-2: #b3bfcb;
+      --ink-3: #7c8894;
+      --line: #26313d;
+      --line-2: #34414f;
+      --accent-live: #3fd6c9;
+      --accent-live-soft: #10302e;
+      --accent-cache: #e8a33d;
+      --accent-cache-soft: #35270f;
+      --accent-auth: #a397f2;
+      --accent-auth-soft: #241f42;
+      --good: #46c17f;
+      --good-soft: #123322;
+      --bad: #f0776f;
+      --bad-soft: #3a1a18;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0f14; --surface: #121821; --surface-2: #1a222d;
+    --ink: #e7ecf1; --ink-2: #b3bfcb; --ink-3: #7c8894;
+    --line: #26313d; --line-2: #34414f;
+    --accent-live: #3fd6c9; --accent-live-soft: #10302e;
+    --accent-cache: #e8a33d; --accent-cache-soft: #35270f;
+    --accent-auth: #a397f2; --accent-auth-soft: #241f42;
+    --good: #46c17f; --good-soft: #123322;
+    --bad: #f0776f; --bad-soft: #3a1a18;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f6f8; --surface: #ffffff; --surface-2: #ebeef2;
+    --ink: #131a22; --ink-2: #3c4753; --ink-3: #6b7684;
+    --line: #d7dde3; --line-2: #c2cad2;
+    --accent-live: #0f8f8a; --accent-live-soft: #e3f4f2;
+    --accent-cache: #b5720a; --accent-cache-soft: #fbf0dc;
+    --accent-auth: #5b4bc4; --accent-auth-soft: #ece9fa;
+    --good: #1c8a53; --good-soft: #e2f5ea;
+    --bad: #b3372e; --bad-soft: #fbe8e6;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .page {
+    max-width: 1160px;
+    margin: 0 auto;
+    padding: 56px 28px 90px;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+  header.intro { display: flex; flex-direction: column; gap: 14px; max-width: 720px; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent-cache);
+    font-weight: 600;
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(26px, 3.4vw, 36px);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+    margin: 0;
+    text-wrap: balance;
+    color: var(--ink);
+  }
+  header.intro p {
+    font-size: 15.5px;
+    line-height: 1.65;
+    color: var(--ink-2);
+    margin: 0;
+  }
+  header.intro code {
+    font-family: var(--mono);
+    font-size: 0.92em;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: var(--ink);
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 22px;
+    padding: 14px 18px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); font-family: var(--mono); }
+  .legend-swatch { width: 22px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+  .legend-swatch.dashed { background: none; border-top: 2px dashed var(--ink-3); height: 0; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+  figure { margin: 0; display: flex; flex-direction: column; gap: 14px; }
+  .fig-head { display: flex; flex-direction: column; gap: 4px; }
+  .fig-label {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 600;
+  }
+  .fig-title {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .diagram-frame {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px;
+    overflow-x: auto;
+  }
+  figure svg { display: block; width: 100%; height: auto; min-width: 980px; }
+  figcaption {
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--ink-3);
+    max-width: 780px;
+  }
+  figcaption b { color: var(--ink-2); font-weight: 600; }
+
+  /* ---- SVG element styling via classes (tokens drive theme, per artifact rules) ---- */
+  .box-outer { fill: var(--surface); stroke: var(--line-2); stroke-width: 1.5; }
+  .box-app { fill: var(--surface-2); stroke: var(--line-2); stroke-width: 1.5; }
+  .box-chip { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  .box-chip-dashed { fill: var(--surface); stroke: var(--line-2); stroke-width: 1.25; stroke-dasharray: 4 3; }
+  .box-highlight { fill: var(--accent-cache-soft); stroke: var(--accent-cache); stroke-width: 1.75; }
+  .box-node { fill: var(--surface); stroke: var(--line-2); stroke-width: 1.25; }
+  .box-good { fill: var(--good-soft); stroke: var(--good); stroke-width: 1.5; }
+  .box-bad { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 1.5; }
+  .box-neutral { fill: var(--surface-2); stroke: var(--line-2); stroke-width: 1.25; stroke-dasharray: 3 3; }
+  .box-diamond { fill: var(--surface); stroke: var(--accent-auth); stroke-width: 1.5; }
+
+  .lbl-region { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; fill: var(--ink-3); font-weight: 600; }
+  .lbl-title { font-family: var(--mono); font-size: 13.5px; font-weight: 700; fill: var(--ink); }
+  .lbl-sub { font-family: var(--sans); font-size: 11.5px; fill: var(--ink-3); }
+  .lbl-chip { font-family: var(--mono); font-size: 12px; font-weight: 600; fill: var(--ink); }
+  .lbl-chip-sub { font-family: var(--sans); font-size: 10.5px; fill: var(--ink-3); }
+  .lbl-arrow { font-family: var(--mono); font-size: 11px; fill: var(--ink-2); }
+  .lbl-arrow-2 { font-family: var(--sans); font-size: 10.5px; fill: var(--ink-3); }
+  .lbl-good { font-family: var(--mono); font-size: 12.5px; font-weight: 700; fill: var(--good); }
+  .lbl-bad { font-family: var(--mono); font-size: 12.5px; font-weight: 700; fill: var(--bad); }
+  .lbl-neutral { font-family: var(--mono); font-size: 11.5px; font-weight: 600; fill: var(--ink-3); }
+  .lbl-vm { font-family: var(--mono); font-size: 10.5px; font-weight: 600; fill: var(--ink); }
+
+  .arrow-live { stroke: var(--accent-live); stroke-width: 2; fill: none; }
+  .arrow-auth { stroke: var(--accent-auth); stroke-width: 2; fill: none; }
+  .arrow-cache { stroke: var(--accent-cache); stroke-width: 2; fill: none; }
+  .arrow-neutral { stroke: var(--ink-3); stroke-width: 1.5; fill: none; }
+  .arrow-dashed { stroke: var(--ink-3); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+  .arrow-migrate { stroke: var(--accent-cache); stroke-width: 2; fill: none; stroke-dasharray: 6 4; }
+  .arrow-good { stroke: var(--good); stroke-width: 2; fill: none; }
+  .arrow-bad { stroke: var(--bad); stroke-width: 1.75; fill: none; }
+
+  .section-divider { border: none; border-top: 1px solid var(--line); margin: 0; }
+
+  .callouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .callout { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+  .callout .k { font-family: var(--mono); font-size: 11.5px; font-weight: 700; color: var(--accent-cache); letter-spacing: 0.03em; }
+  .callout .v { font-size: 13px; line-height: 1.55; color: var(--ink-2); }
+</style>
+
+<div class="page">
+
+  <header class="intro">
+    <div class="eyebrow">System architecture &amp; connection flow</div>
+    <h1>vmp-ui × proxmox-proxy</h1>
+    <p>
+      How the customer/staff portal (<code>apps/portal</code>), the Proxmox
+      proxy (<code>proxmox-proxy</code>), Supabase, and a Proxmox VE cluster
+      fit together — and, in Fig. 2, exactly how a VM operation resolves to
+      its <b>current</b> node on a cluster where nodes and VM placement are
+      both dynamic.
+    </p>
+  </header>
+
+  <div class="legend">
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--accent-live)"></span> live / uncached data path</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--accent-auth)"></span> auth / security boundary</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--accent-cache)"></span> cache &amp; node-resolution mechanism</div>
+    <div class="legend-item"><span class="legend-swatch dashed"></span> out-of-band (websocket) or cluster event</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--good)"></span> success outcome</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--bad)"></span> error outcome</div>
+  </div>
+
+  <!-- ============================= FIGURE 1 ============================= -->
+  <figure>
+    <div class="fig-head">
+      <div class="fig-label">Fig. 1</div>
+      <div class="fig-title">Full-system architecture &amp; connection flow</div>
+    </div>
+    <div class="diagram-frame">
+      <svg viewBox="0 0 1480 1040" role="img" aria-label="Architecture diagram showing Customer and Staff browsers connecting to the vmp-ui portal, which talks to Supabase directly and to proxmox-proxy via a bearer JWT; proxmox-proxy talks to Supabase with a service-role key and to the Proxmox VE cluster with a server-side token, including a live cluster-resources discovery call and a VM migrating between nodes.">
+        <defs>
+          <marker id="ah-live" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--accent-live)"/></marker>
+          <marker id="ah-auth" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--accent-auth)"/></marker>
+          <marker id="ah-cache" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--accent-cache)"/></marker>
+          <marker id="ah-neutral" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--ink-3)"/></marker>
+        </defs>
+
+        <!-- ================= Row: Clients ================= -->
+        <rect x="40" y="34" width="240" height="72" rx="6" class="box-outer"/>
+        <text x="160" y="65" text-anchor="middle" class="lbl-title">Customer Browser</text>
+        <text x="160" y="86" text-anchor="middle" class="lbl-sub">CustomerVMListView, CustomerVMDetail</text>
+
+        <rect x="320" y="34" width="240" height="72" rx="6" class="box-outer"/>
+        <text x="440" y="65" text-anchor="middle" class="lbl-title">Staff Browser</text>
+        <text x="440" y="86" text-anchor="middle" class="lbl-sub">Admin / Engineer — VMDrawer, provisioning</text>
+
+        <line x1="160" y1="106" x2="160" y2="168" class="arrow-neutral" marker-end="url(#ah-neutral)"/>
+        <line x1="440" y1="106" x2="440" y2="168" class="arrow-neutral" marker-end="url(#ah-neutral)"/>
+        <text x="205" y="140" class="lbl-arrow-2">loads app · HTTPS</text>
+
+        <!-- ================= Portal box ================= -->
+        <rect x="40" y="170" width="560" height="382" rx="8" class="box-app"/>
+        <text x="62" y="198" class="lbl-region">vmp-ui / apps/portal — React + Vite</text>
+
+        <text x="62" y="222" class="lbl-region" fill="var(--ink-3)">customer</text>
+        <rect x="62" y="230" width="150" height="46" rx="5" class="box-chip"/>
+        <text x="137" y="252" text-anchor="middle" class="lbl-chip">VMListView</text>
+        <text x="137" y="266" text-anchor="middle" class="lbl-chip-sub">customer-portal/</text>
+        <rect x="224" y="230" width="150" height="46" rx="5" class="box-chip"/>
+        <text x="299" y="252" text-anchor="middle" class="lbl-chip">VMDetail</text>
+        <text x="299" y="266" text-anchor="middle" class="lbl-chip-sub">power actions</text>
+        <rect x="386" y="230" width="176" height="46" rx="5" class="box-chip"/>
+        <text x="474" y="252" text-anchor="middle" class="lbl-chip">ConsolePage</text>
+        <text x="474" y="266" text-anchor="middle" class="lbl-chip-sub">@novnc/novnc RFB</text>
+
+        <text x="62" y="304" class="lbl-region" fill="var(--ink-3)">staff (admin / engineer)</text>
+        <rect x="62" y="312" width="150" height="46" rx="5" class="box-chip"/>
+        <text x="137" y="334" text-anchor="middle" class="lbl-chip">VMDrawer</text>
+        <text x="137" y="348" text-anchor="middle" class="lbl-chip-sub">usage detail</text>
+        <rect x="224" y="312" width="168" height="46" rx="5" class="box-chip"/>
+        <text x="308" y="334" text-anchor="middle" class="lbl-chip">AdminDirectVMModal</text>
+        <text x="308" y="348" text-anchor="middle" class="lbl-chip-sub">writes assigned_vmid+node</text>
+        <rect x="404" y="312" width="158" height="46" rx="5" class="box-chip"/>
+        <text x="483" y="334" text-anchor="middle" class="lbl-chip">EngineerVMCreate</text>
+        <text x="483" y="348" text-anchor="middle" class="lbl-chip-sub">bindings form</text>
+
+        <text x="62" y="386" class="lbl-region" fill="var(--ink-3)">data layer</text>
+        <rect x="62" y="394" width="150" height="46" rx="5" class="box-chip"/>
+        <text x="137" y="416" text-anchor="middle" class="lbl-chip">vmStore.ts</text>
+        <text x="137" y="430" text-anchor="middle" class="lbl-chip-sub">zustand</text>
+        <rect x="224" y="394" width="150" height="46" rx="5" class="box-chip"/>
+        <text x="299" y="416" text-anchor="middle" class="lbl-chip">proxmoxApi.ts</text>
+        <text x="299" y="430" text-anchor="middle" class="lbl-chip-sub">axios client</text>
+        <rect x="386" y="394" width="176" height="46" rx="5" class="box-chip-dashed"/>
+        <text x="474" y="412" text-anchor="middle" class="lbl-chip">ProxmoxNodeInput</text>
+        <text x="474" y="426" text-anchor="middle" class="lbl-chip-sub">live node autocomplete</text>
+
+        <rect x="62" y="460" width="500" height="70" rx="5" fill="none" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 3"/>
+        <text x="312" y="485" text-anchor="middle" class="lbl-sub">The portal never calls Proxmox directly.</text>
+        <text x="312" y="503" text-anchor="middle" class="lbl-sub">proxmox-proxy is its only path to live VM status / usage.</text>
+
+        <!-- ================= proxmox-proxy box ================= -->
+        <rect x="680" y="170" width="760" height="382" rx="8" class="box-app"/>
+        <text x="702" y="198" class="lbl-region">proxmox-proxy — Express (this repo, dev-zero)</text>
+
+        <text x="702" y="222" class="lbl-region" fill="var(--ink-3)">middleware chain</text>
+        <rect x="702" y="230" width="130" height="40" rx="5" class="box-chip"/>
+        <text x="767" y="255" text-anchor="middle" class="lbl-chip" font-size="11">authenticate</text>
+        <line x1="832" y1="250" x2="852" y2="250" class="arrow-neutral" marker-end="url(#ah-neutral)"/>
+        <rect x="854" y="230" width="168" height="40" rx="5" class="box-chip"/>
+        <text x="938" y="249" text-anchor="middle" class="lbl-chip" font-size="10.5">authorizeVm /</text>
+        <text x="938" y="261" text-anchor="middle" class="lbl-chip" font-size="10.5">ByRecord</text>
+        <line x1="1022" y1="250" x2="1042" y2="250" class="arrow-neutral" marker-end="url(#ah-neutral)"/>
+        <rect x="1044" y="230" width="150" height="40" rx="5" class="box-chip"/>
+        <text x="1119" y="255" text-anchor="middle" class="lbl-chip" font-size="10.5">vmActionLimiter</text>
+        <line x1="1194" y1="250" x2="1214" y2="250" class="arrow-neutral" marker-end="url(#ah-neutral)"/>
+        <rect x="1216" y="230" width="106" height="40" rx="5" class="box-chip"/>
+        <text x="1269" y="255" text-anchor="middle" class="lbl-chip" font-size="10.5">auditLog</text>
+
+        <text x="702" y="304" class="lbl-region" fill="var(--ink-3)">routes</text>
+        <rect x="702" y="312" width="150" height="42" rx="5" class="box-chip"/>
+        <text x="777" y="338" text-anchor="middle" class="lbl-chip" font-size="11">/api/nodes</text>
+        <rect x="864" y="312" width="240" height="42" rx="5" class="box-chip"/>
+        <text x="984" y="333" text-anchor="middle" class="lbl-chip" font-size="11">/api/vms</text>
+        <text x="984" y="347" text-anchor="middle" class="lbl-chip-sub">:vmid · by-record/:recordId</text>
+        <rect x="1116" y="312" width="206" height="42" rx="5" class="box-chip"/>
+        <text x="1219" y="333" text-anchor="middle" class="lbl-chip" font-size="10.5">/api/admin/vms/:id</text>
+        <text x="1219" y="347" text-anchor="middle" class="lbl-chip-sub">/bindings</text>
+
+        <rect x="702" y="368" width="620" height="76" rx="6" class="box-highlight"/>
+        <text x="722" y="392" class="lbl-title" fill="var(--accent-cache)">Node Resolution Engine</text>
+        <text x="722" y="410" class="lbl-sub">resolveNodeForVmid() + withNodeFailover() — resolves each VM's</text>
+        <text x="722" y="425" class="lbl-sub">CURRENT node every call; retries once on migration; self-heals cache. → Fig. 2</text>
+
+        <rect x="702" y="458" width="200" height="56" rx="5" class="box-chip"/>
+        <text x="802" y="480" text-anchor="middle" class="lbl-chip" font-size="11">syncVmStatus</text>
+        <text x="802" y="496" text-anchor="middle" class="lbl-chip-sub">cron · every 2 min</text>
+        <rect x="914" y="458" width="200" height="56" rx="5" class="box-chip"/>
+        <text x="1014" y="480" text-anchor="middle" class="lbl-chip" font-size="11">proxmoxClient</text>
+        <text x="1014" y="496" text-anchor="middle" class="lbl-chip-sub">circuit breaker · self-signed TLS</text>
+        <rect x="1126" y="458" width="196" height="56" rx="5" class="box-chip"/>
+        <text x="1224" y="480" text-anchor="middle" class="lbl-chip" font-size="11">wsConsoleProxy</text>
+        <text x="1224" y="496" text-anchor="middle" class="lbl-chip-sub">/ws/console/:token relay</text>
+
+        <!-- Portal -> Proxy (auth boundary) -->
+        <line x1="600" y1="330" x2="676" y2="330" class="arrow-auth" marker-end="url(#ah-auth)"/>
+        <text x="612" y="316" class="lbl-arrow" fill="var(--accent-auth)">Authorization: Bearer &lt;supabase JWT&gt;</text>
+        <text x="612" y="352" class="lbl-arrow-2">VITE_API_URL — status/stats poll, power actions, console</text>
+
+        <!-- Customer browser -> proxy (console websocket, dashed, arcs over portal) -->
+        <path d="M 280,60 C 620,-40 900,40 1000,168" class="arrow-dashed" marker-end="url(#ah-neutral)"/>
+        <text x="560" y="30" text-anchor="middle" class="lbl-arrow-2">WS /ws/console/:token — opaque session; host/port/Proxmox token never reach the browser</text>
+
+        <!-- ================= Supabase box ================= -->
+        <rect x="40" y="640" width="560" height="240" rx="8" class="box-app"/>
+        <text x="62" y="668" class="lbl-region">Supabase — shared project</text>
+
+        <rect x="62" y="682" width="152" height="52" rx="5" class="box-chip"/>
+        <text x="138" y="704" text-anchor="middle" class="lbl-chip" font-size="11">auth.users</text>
+        <text x="138" y="720" text-anchor="middle" class="lbl-chip-sub">JWT issuer</text>
+        <rect x="226" y="682" width="160" height="52" rx="5" class="box-chip"/>
+        <text x="306" y="704" text-anchor="middle" class="lbl-chip" font-size="11">vm_ownership</text>
+        <text x="306" y="720" text-anchor="middle" class="lbl-chip-sub">vmid, node cache</text>
+        <rect x="398" y="682" width="164" height="52" rx="5" class="box-chip"/>
+        <text x="480" y="704" text-anchor="middle" class="lbl-chip" font-size="11">team_members</text>
+        <text x="480" y="720" text-anchor="middle" class="lbl-chip-sub">staff role source</text>
+
+        <rect x="62" y="746" width="200" height="52" rx="5" class="box-chip"/>
+        <text x="162" y="768" text-anchor="middle" class="lbl-chip" font-size="11">vm_action_audit</text>
+        <text x="162" y="784" text-anchor="middle" class="lbl-chip-sub">every action logged</text>
+        <rect x="278" y="746" width="284" height="52" rx="5" class="box-chip"/>
+        <text x="420" y="768" text-anchor="middle" class="lbl-chip" font-size="11">vms / vms_customer_safe</text>
+        <text x="420" y="784" text-anchor="middle" class="lbl-chip-sub">metadata · password_encrypted (pgcrypto)</text>
+
+        <text x="62" y="838" class="lbl-sub">RLS is the backstop for direct browser access —</text>
+        <text x="62" y="856" class="lbl-sub">proxmox-proxy's service-role key bypasses it; ownership checks are the real control.</text>
+
+        <!-- Portal -> Supabase -->
+        <line x1="320" y1="552" x2="320" y2="638" class="arrow-live" marker-end="url(#ah-live)"/>
+        <text x="332" y="580" class="lbl-arrow" fill="var(--accent-live)">supabase-js</text>
+        <text x="332" y="596" class="lbl-arrow-2">anon key + user JWT</text>
+        <text x="332" y="611" class="lbl-arrow-2">auth · vms_customer_safe</text>
+
+        <!-- Proxy -> Supabase (elbowed) -->
+        <path d="M 900,552 L 900,600 L 610,600 L 610,660" class="arrow-auth" marker-end="url(#ah-auth)" fill="none"/>
+        <text x="612" y="592" text-anchor="end" class="lbl-arrow" fill="var(--accent-auth)">service-role key · bypasses RLS</text>
+
+        <!-- ================= Proxmox VE Cluster box ================= -->
+        <rect x="680" y="640" width="760" height="360" rx="8" class="box-app"/>
+        <text x="702" y="668" class="lbl-region">Proxmox VE Cluster — dynamic node set, no fixed list</text>
+
+        <!-- node1 -->
+        <rect x="702" y="686" width="164" height="150" rx="6" class="box-node"/>
+        <text x="784" y="706" text-anchor="middle" class="lbl-title" font-size="12">node1</text>
+        <rect x="716" y="716" width="136" height="24" rx="3" fill="var(--accent-cache-soft)" stroke="var(--accent-cache)" stroke-width="1"/>
+        <text x="784" y="732" text-anchor="middle" class="lbl-vm">VM 100</text>
+        <rect x="716" y="746" width="136" height="24" rx="3" class="box-chip"/>
+        <text x="784" y="762" text-anchor="middle" class="lbl-vm">VM 101 … 139</text>
+        <text x="784" y="800" text-anchor="middle" class="lbl-sub">down / degraded</text>
+        <text x="784" y="816" class="lbl-sub" text-anchor="middle">(example scenario)</text>
+
+        <!-- node2 -->
+        <rect x="882" y="686" width="164" height="150" rx="6" class="box-node"/>
+        <text x="964" y="706" text-anchor="middle" class="lbl-title" font-size="12">node2</text>
+        <rect x="896" y="716" width="136" height="24" rx="3" fill="var(--good-soft)" stroke="var(--good)" stroke-width="1"/>
+        <text x="964" y="732" text-anchor="middle" class="lbl-vm">VM 100 (moved)</text>
+        <rect x="896" y="746" width="136" height="24" rx="3" class="box-chip"/>
+        <text x="964" y="762" text-anchor="middle" class="lbl-vm">VM 103, 108…</text>
+
+        <!-- node3 -->
+        <rect x="1062" y="686" width="164" height="150" rx="6" class="box-node"/>
+        <text x="1144" y="706" text-anchor="middle" class="lbl-title" font-size="12">node3</text>
+        <rect x="1076" y="716" width="136" height="24" rx="3" class="box-chip"/>
+        <text x="1144" y="732" text-anchor="middle" class="lbl-vm">VM 101, 104…</text>
+
+        <!-- node4 (dynamic, dashed = just added) -->
+        <rect x="1242" y="686" width="94" height="150" rx="6" class="box-chip-dashed"/>
+        <text x="1289" y="706" text-anchor="middle" class="lbl-title" font-size="11">node4</text>
+        <text x="1289" y="726" text-anchor="middle" class="lbl-sub" font-size="9.5">added</text>
+        <text x="1289" y="740" text-anchor="middle" class="lbl-sub" font-size="9.5">dynamically</text>
+
+        <!-- node5 -->
+        <rect x="1350" y="686" width="70" height="150" rx="6" class="box-chip-dashed"/>
+        <text x="1385" y="706" text-anchor="middle" class="lbl-title" font-size="11">node5</text>
+        <text x="1385" y="726" text-anchor="middle" class="lbl-sub" font-size="9.5">+more</text>
+
+        <!-- migration arrow VM100 node1 -> node2 -->
+        <path d="M 852,728 C 866,700 882,700 894,724" class="arrow-migrate" marker-end="url(#ah-cache)"/>
+        <text x="873" y="694" text-anchor="middle" class="lbl-arrow" fill="var(--accent-cache)" font-size="10">migrates</text>
+
+        <text x="702" y="874" class="lbl-sub">GET /cluster/resources?type=vm — always live, source of truth</text>
+        <text x="702" y="892" class="lbl-sub">for Node Resolution Engine (Fig. 2), syncVmStatus, and admin's fleet-wide VM list.</text>
+
+        <!-- Proxy -> Proxmox cluster -->
+        <line x1="1180" y1="552" x2="1180" y2="638" class="arrow-cache" marker-end="url(#ah-cache)"/>
+        <text x="1192" y="580" class="lbl-arrow" fill="var(--accent-cache)">PROXMOX_TOKEN</text>
+        <text x="1192" y="596" class="lbl-arrow-2">server-side only · node-scoped REST</text>
+        <text x="1192" y="611" class="lbl-arrow-2">+ /cluster/resources</text>
+
+        <!-- ws relay proxy -> proxmox (dashed) -->
+        <line x1="1260" y1="552" x2="1260" y2="638" class="arrow-dashed" marker-end="url(#ah-neutral)"/>
+        <text x="1272" y="630" class="lbl-arrow-2">vncwebsocket relay</text>
+      </svg>
+    </div>
+    <figcaption>
+      The portal never talks to Proxmox — <b>proxmox-proxy is the only thing
+      with network access to it</b>. Two independent trust boundaries cross
+      into proxmox-proxy: the portal's caller JWT (violet), and proxmox-proxy's
+      own Supabase service-role key and Proxmox token (also violet/amber) —
+      neither the browser nor Proxmox credentials ever mix. Node/VM discovery
+      (teal, amber) is a live call every time, never a cached list — see
+      Fig. 2 for exactly how a single VM operation resolves to wherever that
+      VM actually is right now.
+    </figcaption>
+  </figure>
+
+  <hr class="section-divider"/>
+
+  <!-- ============================= FIGURE 2 ============================= -->
+  <figure>
+    <div class="fig-head">
+      <div class="fig-label">Fig. 2</div>
+      <div class="fig-title">VM → current-node resolution &amp; self-heal (the dynamic part)</div>
+    </div>
+    <div class="diagram-frame">
+      <svg viewBox="0 0 1560 740" role="img" aria-label="Flowchart: a VM operation first tries the cached node; if Proxmox rejects it as the wrong node, proxmox-proxy re-resolves live from cluster/resources and branches into four outcomes — the live lookup itself failing (clusterUnreadable), the vmid not existing anywhere (vmNotFound), the same node still being reported (nodeUnreachable, likely offline), or a different node being found, which is retried once and the cache is self-healed.">
+        <defs>
+          <marker id="bh-neutral" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--ink-3)"/></marker>
+          <marker id="bh-cache" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--accent-cache)"/></marker>
+          <marker id="bh-good" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--good)"/></marker>
+          <marker id="bh-bad" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--bad)"/></marker>
+        </defs>
+
+        <!-- Step 1 -->
+        <rect x="24" y="350" width="210" height="72" rx="6" class="box-outer"/>
+        <text x="129" y="380" text-anchor="middle" class="lbl-title" font-size="12.5">Request: operate on</text>
+        <text x="129" y="398" text-anchor="middle" class="lbl-title" font-size="12.5">vmid 100</text>
+        <text x="129" y="414" text-anchor="middle" class="lbl-sub">start / status / console / …</text>
+        <line x1="234" y1="386" x2="264" y2="386" class="arrow-neutral" marker-end="url(#bh-neutral)"/>
+
+        <!-- Step 2 -->
+        <rect x="266" y="350" width="240" height="72" rx="6" class="box-outer"/>
+        <text x="386" y="378" text-anchor="middle" class="lbl-title" font-size="12">Call Proxmox using</text>
+        <text x="386" y="396" text-anchor="middle" class="lbl-title" font-size="12">cached node</text>
+        <text x="386" y="412" text-anchor="middle" class="lbl-sub">vm_ownership.node = "node1"</text>
+        <line x1="506" y1="386" x2="536" y2="386" class="arrow-neutral" marker-end="url(#bh-neutral)"/>
+
+        <!-- Diamond: Succeeded? -->
+        <polygon points="622,326 706,386 622,446 538,386" class="box-diamond"/>
+        <text x="622" y="382" text-anchor="middle" class="lbl-title" font-size="12">Succeeded on</text>
+        <text x="622" y="398" text-anchor="middle" class="lbl-title" font-size="12">node1?</text>
+
+        <!-- YES -> success -->
+        <line x1="622" y1="446" x2="622" y2="560" class="arrow-good" marker-end="url(#bh-good)"/>
+        <text x="634" y="500" class="lbl-arrow" fill="var(--good)">yes</text>
+        <rect x="502" y="562" width="240" height="60" rx="6" class="box-good"/>
+        <text x="622" y="588" text-anchor="middle" class="lbl-good">200 OK</text>
+        <text x="622" y="606" text-anchor="middle" class="lbl-sub">executed on the cached node — the common case</text>
+
+        <!-- NO, unrelated error -> rethrown -->
+        <path d="M 622,326 L 622,220" class="arrow-neutral" marker-end="url(#bh-neutral)"/>
+        <text x="634" y="270" class="lbl-arrow">no — unrelated error</text>
+        <rect x="472" y="130" width="300" height="72" rx="6" class="box-neutral"/>
+        <text x="622" y="156" text-anchor="middle" class="lbl-neutral">Rethrown unchanged</text>
+        <text x="622" y="174" text-anchor="middle" class="lbl-sub">auth / permission / timeout —</text>
+        <text x="622" y="190" text-anchor="middle" class="lbl-sub">not this mechanism's concern</text>
+
+        <!-- NO, wrong-node signature -> re-resolve -->
+        <line x1="706" y1="386" x2="856" y2="386" class="arrow-cache" marker-end="url(#bh-cache)"/>
+        <text x="718" y="372" class="lbl-arrow" fill="var(--accent-cache)">no — "config file does not exist" (wrong node)</text>
+
+        <!-- Step 4: re-resolve, highlighted -->
+        <rect x="858" y="346" width="270" height="80" rx="6" class="box-highlight"/>
+        <text x="993" y="372" text-anchor="middle" class="lbl-title" fill="var(--accent-cache)" font-size="12">Re-resolve, live</text>
+        <text x="993" y="390" text-anchor="middle" class="lbl-sub">GET /cluster/resources?type=vm</text>
+        <text x="993" y="406" text-anchor="middle" class="lbl-sub">resolveNodeForVmid(100)</text>
+
+        <!-- Fork connectors from step4 right edge to 4 rows -->
+        <path d="M 1128,362 L 1150,362 L 1150,126 L 1172,126" class="arrow-bad" marker-end="url(#bh-bad)"/>
+        <path d="M 1128,376 L 1150,376 L 1150,262 L 1172,262" class="arrow-bad" marker-end="url(#bh-bad)"/>
+        <path d="M 1128,398 L 1150,398 L 1150,534 L 1172,534" class="arrow-bad" marker-end="url(#bh-bad)"/>
+        <path d="M 1128,412 L 1150,412 L 1150,670 L 1172,670" class="arrow-cache" marker-end="url(#bh-cache)"/>
+
+        <!-- Row a: cluster lookup itself fails -->
+        <rect x="1174" y="90" width="230" height="72" rx="6" class="box-outer"/>
+        <text x="1289" y="116" text-anchor="middle" class="lbl-title" font-size="11.5">Lookup call itself</text>
+        <text x="1289" y="132" text-anchor="middle" class="lbl-title" font-size="11.5">throws</text>
+        <text x="1289" y="150" text-anchor="middle" class="lbl-sub">Proxmox API unreachable</text>
+        <line x1="1404" y1="126" x2="1424" y2="126" class="arrow-bad" marker-end="url(#bh-bad)"/>
+        <rect x="1426" y="94" width="122" height="64" rx="6" class="box-bad"/>
+        <text x="1487" y="120" text-anchor="middle" class="lbl-bad" font-size="12">503</text>
+        <text x="1487" y="138" text-anchor="middle" class="lbl-bad" font-size="10.5">clusterUnreadable</text>
+
+        <!-- Row b: not found -->
+        <rect x="1174" y="226" width="230" height="72" rx="6" class="box-outer"/>
+        <text x="1289" y="252" text-anchor="middle" class="lbl-title" font-size="11.5">vmid missing from</text>
+        <text x="1289" y="268" text-anchor="middle" class="lbl-title" font-size="11.5">live cluster state</text>
+        <text x="1289" y="286" text-anchor="middle" class="lbl-sub">deleted, or never existed</text>
+        <line x1="1404" y1="262" x2="1424" y2="262" class="arrow-bad" marker-end="url(#bh-bad)"/>
+        <rect x="1426" y="230" width="122" height="64" rx="6" class="box-bad"/>
+        <text x="1487" y="256" text-anchor="middle" class="lbl-bad" font-size="12">404</text>
+        <text x="1487" y="274" text-anchor="middle" class="lbl-bad" font-size="10.5">vmNotFound</text>
+
+        <!-- Row c: same node reported -> unreachable -->
+        <rect x="1174" y="498" width="230" height="72" rx="6" class="box-outer"/>
+        <text x="1289" y="524" text-anchor="middle" class="lbl-title" font-size="11.5">Same node ("node1")</text>
+        <text x="1289" y="540" text-anchor="middle" class="lbl-title" font-size="11.5">still reported</text>
+        <text x="1289" y="558" text-anchor="middle" class="lbl-sub">not a migration — node1 itself</text>
+        <line x1="1404" y1="534" x2="1424" y2="534" class="arrow-bad" marker-end="url(#bh-bad)"/>
+        <rect x="1426" y="502" width="122" height="64" rx="6" class="box-bad"/>
+        <text x="1487" y="524" text-anchor="middle" class="lbl-bad" font-size="12">503</text>
+        <text x="1487" y="542" text-anchor="middle" class="lbl-bad" font-size="10">nodeUnreachable</text>
+        <text x="1487" y="556" text-anchor="middle" class="lbl-sub" font-size="9">may be offline</text>
+
+        <!-- Row d: different node -> migrated, retry, self-heal -->
+        <rect x="1174" y="634" width="230" height="80" rx="6" class="box-highlight"/>
+        <text x="1289" y="658" text-anchor="middle" class="lbl-title" fill="var(--accent-cache)" font-size="11.5">Different node found</text>
+        <text x="1289" y="674" text-anchor="middle" class="lbl-title" fill="var(--accent-cache)" font-size="11.5">— "node2"</text>
+        <text x="1289" y="692" text-anchor="middle" class="lbl-sub">the actual migration case</text>
+        <text x="1289" y="706" text-anchor="middle" class="lbl-sub">retried exactly once, never looped</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>This is the exact mechanism that answers "VM100 is on node1, but if
+      node1 dies, where did all its VMs go?"</b> — every request re-checks,
+      never trusts history. The four outcomes are deliberately distinct
+      responses (<code>src/utils/nodeFailover.js</code>), not one generic
+      500: a genuine migration (bottom right) self-heals the cache
+      immediately so the next request doesn't pay this cost again; an
+      offline node, a deleted VM, and an unreachable cluster each return
+      their own clear status instead of looking identical.
+    </figcaption>
+  </figure>
+
+  <hr class="section-divider"/>
+
+  <!-- ============================= FIGURE 3 ============================= -->
+  <figure>
+    <div class="fig-head">
+      <div class="fig-label">Fig. 3</div>
+      <div class="fig-title">proxmox-proxy — request pipeline &amp; module map</div>
+    </div>
+    <div class="diagram-frame">
+      <svg viewBox="0 0 1560 900" role="img" aria-label="Detailed pipeline diagram of proxmox-proxy: global middleware (helmet, cors, rate limit, morgan) splits into two parallel authorization lanes — vmid-keyed admin routes and by-record customer-facing routes, which differ in an extra per-user rate limiter and a 404-not-403 ownership check — both converging on withNodeFailover and proxmoxClient's circuit breaker before reaching Proxmox, with a shared errorHandler catching failures from any stage, plus separate lanes for the syncVmStatus cron job and the websocket console relay.">
+        <defs>
+          <marker id="ch-neutral" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--ink-3)"/></marker>
+          <marker id="ch-auth" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--accent-auth)"/></marker>
+          <marker id="ch-cache" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--accent-cache)"/></marker>
+          <marker id="ch-bad" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--bad)"/></marker>
+        </defs>
+
+        <!-- Global middleware row -->
+        <text x="40" y="24" class="lbl-region">index.js — global middleware, every request</text>
+        <rect x="40" y="30" width="130" height="54" rx="6" class="box-outer"/>
+        <text x="105" y="52" text-anchor="middle" class="lbl-chip" font-size="11.5">helmet</text>
+        <text x="105" y="68" text-anchor="middle" class="lbl-chip-sub">security headers</text>
+        <line x1="170" y1="57" x2="190" y2="57" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+        <rect x="192" y="30" width="170" height="54" rx="6" class="box-outer"/>
+        <text x="277" y="52" text-anchor="middle" class="lbl-chip" font-size="11.5">cors</text>
+        <text x="277" y="68" text-anchor="middle" class="lbl-chip-sub">ALLOWED_ORIGINS allowlist</text>
+        <line x1="362" y1="57" x2="382" y2="57" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+        <rect x="384" y="30" width="210" height="54" rx="6" class="box-outer"/>
+        <text x="489" y="52" text-anchor="middle" class="lbl-chip" font-size="11.5">express-rate-limit</text>
+        <text x="489" y="68" text-anchor="middle" class="lbl-chip-sub">100 / 60s, per client IP</text>
+        <line x1="594" y1="57" x2="614" y2="57" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+        <rect x="616" y="30" width="120" height="54" rx="6" class="box-outer"/>
+        <text x="676" y="52" text-anchor="middle" class="lbl-chip" font-size="11.5">morgan</text>
+        <text x="676" y="68" text-anchor="middle" class="lbl-chip-sub">dev request log</text>
+
+        <path d="M 676,84 L 676,104 L 320,104 L 320,128" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+        <path d="M 676,84 L 676,104 L 950,104 L 950,128" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+
+        <!-- Column headers -->
+        <rect x="70" y="130" width="500" height="38" rx="5" fill="var(--surface-2)" stroke="var(--line-2)" stroke-width="1"/>
+        <text x="320" y="154" text-anchor="middle" class="lbl-title" font-size="12.5">/api/vms/:vmid — admin / internal use</text>
+        <rect x="700" y="130" width="500" height="38" rx="5" fill="var(--surface-2)" stroke="var(--line-2)" stroke-width="1"/>
+        <text x="950" y="154" text-anchor="middle" class="lbl-title" font-size="12.5">/api/vms/by-record/:recordId — customer-facing</text>
+
+        <!-- Column A: :vmid -->
+        <rect x="70" y="190" width="500" height="50" rx="6" class="box-chip"/>
+        <text x="320" y="212" text-anchor="middle" class="lbl-chip" font-size="12">authenticate</text>
+        <text x="320" y="228" text-anchor="middle" class="lbl-chip-sub">verifies Supabase JWT → req.user · else 401</text>
+        <line x1="320" y1="240" x2="320" y2="262" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+
+        <rect x="70" y="264" width="500" height="76" rx="6" fill="var(--accent-auth-soft)" stroke="var(--accent-auth)" stroke-width="1.5"/>
+        <text x="320" y="286" text-anchor="middle" class="lbl-title" fill="var(--accent-auth)" font-size="12">authorizeVm({allowAdminBypass})</text>
+        <text x="320" y="304" text-anchor="middle" class="lbl-sub">status/stats/list: bypass via isAdminUser() (team_members)</text>
+        <text x="320" y="320" text-anchor="middle" class="lbl-sub">power actions / console / DELETE: ownership-only, bypass=false</text>
+        <text x="320" y="335" text-anchor="middle" class="lbl-sub">overwrites req.params.node from vm_ownership — URL :node is routing-only</text>
+        <line x1="320" y1="340" x2="320" y2="362" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+
+        <rect x="70" y="364" width="240" height="46" rx="6" class="box-chip"/>
+        <text x="190" y="384" text-anchor="middle" class="lbl-chip" font-size="11">requireAdmin</text>
+        <text x="190" y="398" text-anchor="middle" class="lbl-chip-sub">DELETE only · isAdminUser()</text>
+        <rect x="330" y="364" width="240" height="46" rx="6" class="box-chip"/>
+        <text x="450" y="384" text-anchor="middle" class="lbl-chip" font-size="11">auditLog(action)</text>
+        <text x="450" y="398" text-anchor="middle" class="lbl-chip-sub">mutating routes only</text>
+        <line x1="320" y1="410" x2="320" y2="432" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+
+        <rect x="70" y="434" width="500" height="46" rx="6" class="box-outer"/>
+        <text x="320" y="462" text-anchor="middle" class="lbl-chip" font-size="12">route handler — routes/vms.js</text>
+
+        <text x="320" y="500" text-anchor="middle" class="lbl-sub" font-style="italic">no destroy route exists on the by-record path at all —</text>
+        <text x="320" y="516" text-anchor="middle" class="lbl-sub" font-style="italic">a customer can never terminate a VM, even indirectly</text>
+
+        <!-- Column B: by-record -->
+        <rect x="700" y="190" width="500" height="50" rx="6" class="box-chip"/>
+        <text x="950" y="212" text-anchor="middle" class="lbl-chip" font-size="12">authenticate</text>
+        <text x="950" y="228" text-anchor="middle" class="lbl-chip-sub">verifies Supabase JWT → req.user · else 401</text>
+        <line x1="950" y1="240" x2="950" y2="262" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+
+        <rect x="700" y="264" width="500" height="56" rx="6" fill="var(--accent-cache-soft)" stroke="var(--accent-cache)" stroke-width="1.5"/>
+        <text x="950" y="286" text-anchor="middle" class="lbl-title" fill="var(--accent-cache)" font-size="12">vmActionLimiter — 20 / 60s per user</text>
+        <text x="950" y="304" text-anchor="middle" class="lbl-sub">mutating + credentials routes only — an extra layer</text>
+        <text x="950" y="316" text-anchor="middle" class="lbl-sub">on top of the global 100/min/IP limit above</text>
+        <line x1="950" y1="320" x2="950" y2="342" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+
+        <rect x="700" y="344" width="500" height="76" rx="6" fill="var(--accent-auth-soft)" stroke="var(--accent-auth)" stroke-width="1.5"/>
+        <text x="950" y="366" text-anchor="middle" class="lbl-title" fill="var(--accent-auth)" font-size="12">authorizeVmByRecord({allowAdminBypass})</text>
+        <text x="950" y="384" text-anchor="middle" class="lbl-sub">resolves (vmid, node) from vm_ownership.id = recordId</text>
+        <text x="950" y="400" text-anchor="middle" class="lbl-sub">any mismatch → 404, never 403 — ID-probing can't</text>
+        <text x="950" y="415" text-anchor="middle" class="lbl-sub">confirm a record exists (real vmid never echoed back)</text>
+        <line x1="950" y1="420" x2="950" y2="442" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+
+        <rect x="700" y="444" width="500" height="46" rx="6" class="box-chip"/>
+        <text x="950" y="465" text-anchor="middle" class="lbl-chip" font-size="11">auditLog(action)</text>
+        <text x="950" y="480" text-anchor="middle" class="lbl-chip-sub">start/stop/.../credentials_reveal/console</text>
+        <line x1="950" y1="490" x2="950" y2="512" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+
+        <rect x="700" y="514" width="500" height="46" rx="6" class="box-outer"/>
+        <text x="950" y="542" text-anchor="middle" class="lbl-chip" font-size="12">route handler — routes/vms.js</text>
+
+        <!-- Convergence: both columns' handlers feed the same failover/circuit-breaker stage -->
+        <path d="M 320,480 L 320,560 L 470,560 L 470,606" class="arrow-cache" marker-end="url(#ch-cache)" fill="none"/>
+        <path d="M 950,560 L 950,590 L 730,590 L 730,606" class="arrow-cache" marker-end="url(#ch-cache)" fill="none"/>
+        <rect x="360" y="606" width="480" height="76" rx="6" class="box-highlight"/>
+        <text x="600" y="630" text-anchor="middle" class="lbl-title" fill="var(--accent-cache)" font-size="12.5">withNodeFailover() → proxmoxClient</text>
+        <text x="600" y="648" text-anchor="middle" class="lbl-sub">circuit breaker (3 fails → 20s open) · self-signed TLS agent</text>
+        <text x="600" y="664" text-anchor="middle" class="lbl-sub">→ see Fig. 2 for the full resolution/self-heal branch</text>
+        <text x="600" y="678" text-anchor="middle" class="lbl-sub">PROXMOX_TOKEN attached server-side only</text>
+
+        <line x1="600" y1="682" x2="600" y2="712" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+        <rect x="500" y="714" width="200" height="44" rx="6" class="box-node"/>
+        <text x="600" y="741" text-anchor="middle" class="lbl-chip" font-size="11.5">Proxmox VE</text>
+
+        <!-- errorHandler, catches from anywhere (these two are representative, not exhaustive) -->
+        <path d="M 570,302 L 630,302 L 630,80 L 1220,80 L 1220,180" class="arrow-bad" fill="none" marker-end="url(#ch-bad)"/>
+        <path d="M 1200,382 L 1250,382 L 1250,180" class="arrow-bad" fill="none" marker-end="url(#ch-bad)"/>
+        <text x="1080" y="72" class="lbl-arrow" fill="var(--bad)" font-size="10.5">next(err) from any middleware or handler stage</text>
+
+        <rect x="1176" y="180" width="230" height="70" rx="6" class="box-bad"/>
+        <text x="1291" y="204" text-anchor="middle" class="lbl-bad" font-size="12">errorHandler.js</text>
+        <text x="1291" y="222" text-anchor="middle" class="lbl-sub">central catch — single place</text>
+        <text x="1291" y="236" text-anchor="middle" class="lbl-sub">every next(err) ends up</text>
+
+        <line x1="1291" y1="250" x2="1291" y2="278" class="arrow-bad" marker-end="url(#ch-bad)"/>
+        <rect x="1191" y="280" width="200" height="56" rx="6" class="box-outer"/>
+        <text x="1291" y="302" text-anchor="middle" class="lbl-chip" font-size="10.5">{ ok:false, error, path }</text>
+        <text x="1291" y="318" text-anchor="middle" class="lbl-chip-sub">never a credential, ever</text>
+
+        <!-- Side lane: syncVmStatus -->
+        <text x="1176" y="378" class="lbl-region">background</text>
+        <rect x="1176" y="386" width="230" height="70" rx="6" class="box-outer"/>
+        <text x="1291" y="408" text-anchor="middle" class="lbl-chip" font-size="11.5">syncVmStatus</text>
+        <text x="1291" y="424" text-anchor="middle" class="lbl-chip-sub">cron · every 2 min</text>
+        <text x="1291" y="440" text-anchor="middle" class="lbl-chip-sub">3 retries, 2/4/8s backoff on 5xx</text>
+        <line x1="1291" y1="456" x2="1291" y2="478" class="arrow-cache" marker-end="url(#ch-cache)"/>
+        <text x="1310" y="472" class="lbl-arrow-2" font-size="9.5">writes vm_ownership</text>
+
+        <!-- Side lane: WS console -->
+        <text x="1176" y="510" class="lbl-region">websocket (bypasses Express router)</text>
+        <rect x="1176" y="518" width="230" height="56" rx="6" class="box-outer"/>
+        <text x="1291" y="540" text-anchor="middle" class="lbl-chip" font-size="11">server.on('upgrade')</text>
+        <text x="1291" y="555" text-anchor="middle" class="lbl-chip-sub">index.js — url starts with /ws/console/</text>
+        <line x1="1291" y1="574" x2="1291" y2="596" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+        <rect x="1176" y="598" width="230" height="56" rx="6" class="box-chip"/>
+        <text x="1291" y="620" text-anchor="middle" class="lbl-chip" font-size="11">wsConsoleProxy</text>
+        <text x="1291" y="635" text-anchor="middle" class="lbl-chip-sub">looks up vncSessions by opaque token</text>
+        <line x1="1291" y1="654" x2="1291" y2="676" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+        <rect x="1176" y="678" width="230" height="56" rx="6" class="box-chip"/>
+        <text x="1291" y="700" text-anchor="middle" class="lbl-chip" font-size="11">vncSessions</text>
+        <text x="1291" y="715" text-anchor="middle" class="lbl-chip-sub">in-memory, single-process, TTL</text>
+        <line x1="1291" y1="734" x2="1291" y2="756" class="arrow-neutral" marker-end="url(#ch-neutral)"/>
+        <rect x="1176" y="758" width="230" height="44" rx="6" class="box-node"/>
+        <text x="1291" y="785" text-anchor="middle" class="lbl-chip" font-size="11">Proxmox vncwebsocket</text>
+
+        <text x="70" y="820" class="lbl-sub">assertEnv.js checks VM_CREDENTIAL_KEY at boot (index.js, before app.listen) — refuses to start rather than fail on first credential use.</text>
+        <text x="70" y="838" class="lbl-sub">supabaseClient.js is one service-role client shared by every middleware/route/job above — RLS bypassed by design; ownership checks are the real control.</text>
+      </svg>
+    </div>
+    <figcaption>
+      Same middleware shape (<code>authenticate</code> → authorize → audit →
+      handler), but the two identifier schemes genuinely diverge: the
+      customer-facing <code>by-record</code> path carries an extra per-user
+      rate limiter and always resolves to a uniform <code>404</code> on any
+      ownership mismatch (never <code>403</code>, so a probed ID can't even
+      confirm it exists) — the internal <code>:vmid</code> path doesn't need
+      either, since it's staff-only. <code>errorHandler.js</code> is the one
+      place every failure from any stage — auth, ownership, rate limit,
+      Proxmox itself — actually resolves to a response.
+    </figcaption>
+  </figure>
+
+  <div class="callouts">
+    <div class="callout">
+      <div class="k">No fixed node list, anywhere</div>
+      <div class="v"><code>GET /api/nodes</code> and the cluster-wide VM list call Proxmox live, every request — adding/removing a node needs no code change or restart.</div>
+    </div>
+    <div class="callout">
+      <div class="k">Ownership ≠ node</div>
+      <div class="v"><code>vm_ownership</code> ties a customer to a <b>vmid</b>. A VM migrating node1→node2→node5 never touches the ownership relationship — only the cached routing column, which self-heals automatically.</div>
+    </div>
+    <div class="callout">
+      <div class="k">Client never picks the node</div>
+      <div class="v">Node resolution is entirely server-side. A client-supplied <code>:node</code> URL segment is routing-only and gets overwritten before any Proxmox call.</div>
+    </div>
+    <div class="callout">
+      <div class="k">Verified so far</div>
+      <div class="v">18 automated tests (incl. a 40-VM / 5-node redistribution case) pass against mocked Proxmox responses. Not yet run against a real multi-node cluster — see <code>docs/testing/</code>.</div>
+    </div>
+  </div>
+
+</div>

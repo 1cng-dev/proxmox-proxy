@@ -6,9 +6,15 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const nodesRouter = require("./routes/nodes");
 const vmsRouter = require("./routes/vms");
+const adminRouter = require("./routes/admin");
 const errorHandler = require("./errorHandler");
 const { handleConsoleUpgrade } = require("./wsConsoleProxy");
 const vmStatusSync = require("./jobs/syncVmStatus");
+const proxmoxClient = require("./proxmoxClient");
+const { assertVmCredentialKey } = require("./utils/assertEnv");
+
+// Fail loudly now, not on the first credential reveal/write in production.
+assertVmCredentialKey();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -39,6 +45,8 @@ app.get("/health", (req, res) => {
     proxmox: process.env.PROXMOX_URL,
     defaultNode: process.env.PROXMOX_DEFAULT_NODE,
     timestamp: new Date().toISOString(),
+    syncVmStatus: vmStatusSync.getHealth(),
+    proxmoxCircuit: proxmoxClient.getCircuitState(),
   });
 });
 
@@ -70,6 +78,18 @@ app.get("/health", (req, res) => {
 //   POST   /api/nodes/:node/vms/:vmid/start
 //   ... (same pattern)
 //
+// Customer-facing operations, keyed by vm_ownership.id instead of the raw
+// Proxmox vmid — see src/middleware/authorizeVmByRecord.js
+//   GET    /api/vms/by-record/:recordId
+//   GET    /api/vms/by-record/:recordId/stats
+//   GET    /api/vms/by-record/:recordId/credentials
+//   POST   /api/vms/by-record/:recordId/{start|stop|shutdown|reboot|reset|suspend|resume}
+//   GET    /api/vms/by-record/:recordId/console
+//   GET    /api/vms/by-record/:recordId/task/:upid
+//
+// Admin or Engineer (writes the real vmid/node/credential binding for a VM record)
+//   POST   /api/admin/vms/:vmId/bindings
+//
 // Console websocket (no HTTP route — upgraded directly, see below)
 //   WS     /ws/console/:sessionToken
 
@@ -83,6 +103,21 @@ app.use("/api/vms", (req, res, next) => {
 
 // Specific node route
 app.use("/api/nodes/:node/vms", vmsRouter);
+
+app.use("/api/admin", adminRouter);
+
+// ─── 404 (no route matched) ───────────────────────────
+// Express's own default 404 is a plain text/html page with no JSON body —
+// indistinguishable from a network failure in a browser network tab, and
+// silent in server logs. Logging here is the one diagnostic that catches a
+// stale deployment: a route that exists in source but 404s in practice
+// means the *running* process doesn't have it, and this is the only place
+// that's visible from — everything upstream of this either matched a route
+// or never got dispatched into Express's router at all.
+app.use((req, res) => {
+  console.warn(`[404] No route matched: ${req.method} ${req.originalUrl}`);
+  res.status(404).json({ ok: false, error: "Not found", path: req.originalUrl });
+});
 
 // ─── Error Handler ────────────────────────────────────
 app.use(errorHandler);
@@ -118,6 +153,8 @@ server.listen(PORT, () => {
   console.log("  GET  /api/vms/:vmid/stats?timeframe=hour");
   console.log("  GET  /api/vms/:vmid/console");
   console.log("  GET  /api/vms/:vmid/task/:upid");
+  console.log("  GET  /api/vms/by-record/:recordId  (+ stats/credentials/console/task, POST power actions)");
+  console.log("  POST /api/admin/vms/:vmId/bindings  (admin role required)");
   console.log("  WS   /ws/console/:sessionToken\n");
 
   vmStatusSync.start();
