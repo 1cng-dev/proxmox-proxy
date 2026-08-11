@@ -13,6 +13,60 @@ const { resolveNodeForVmid } = require("../utils/resolveNode");
 // ownership — reserved for read-only status/list routes. Power actions,
 // console, and delete always call authorizeVm() (default false) and stay
 // ownership-only even for admins.
+function authorizeByRecord({ allowAdminBypass = false } = {}) {
+  return async function authorizeByRecordMiddleware(req, res, next) {
+    try {
+      const recordId = req.params.recordId;
+
+      if (!recordId) {
+        const err = new Error("Invalid record id");
+        err.status = 400;
+        throw err;
+      }
+
+      if (allowAdminBypass && (await isAdminUser(req.user.id))) {
+        const { data: anyOwnership } = await supabaseAdmin
+          .from("vm_ownership")
+          .select("id, vmid, node, customer_id")
+          .eq("id", recordId)
+          .maybeSingle();
+
+        if (!anyOwnership) {
+          const err = new Error("Record not found");
+          err.status = 404;
+          throw err;
+        }
+
+        req.params.vmid = String(anyOwnership.vmid);
+        req.params.node = anyOwnership.node || req.params.node;
+        req.vmOwnership = anyOwnership;
+        req.isAdmin = true;
+        return next();
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from("vm_ownership")
+        .select("id, vmid, node, customer_id")
+        .eq("id", recordId)
+        .eq("user_id", req.user.id)
+        .single();
+
+      if (error || !data) {
+        const err = new Error("Forbidden");
+        err.status = 403;
+        throw err;
+      }
+
+      req.params.vmid = String(data.vmid);
+      req.params.node = data.node;
+      req.vmOwnership = data;
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
 function authorizeVm({ allowAdminBypass = false } = {}) {
   return async function authorizeVmMiddleware(req, res, next) {
     try {
