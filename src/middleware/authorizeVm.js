@@ -1,6 +1,6 @@
 const supabaseAdmin = require("../supabaseClient");
 const { cleanVmid } = require("../utils/vmid");
-const { isAdminUser } = require("../utils/isAdmin");
+const { isStaffUser } = require("../utils/isAdmin");
 const { resolveNodeForVmid } = require("../utils/resolveNode");
 
 // Must run after authenticate. Confirms req.user owns :vmid via the
@@ -24,7 +24,7 @@ function authorizeByRecord({ allowAdminBypass = false } = {}) {
         throw err;
       }
 
-      if (allowAdminBypass && (await isAdminUser(req.user.id))) {
+      if (allowAdminBypass && (await isStaffUser(req.user.id))) {
         const { data: anyOwnership } = await supabaseAdmin
           .from("vm_ownership")
           .select("id, vmid, node, customer_id")
@@ -78,7 +78,7 @@ function authorizeVm({ allowAdminBypass = false } = {}) {
         throw err;
       }
 
-      if (allowAdminBypass && (await isAdminUser(req.user.id))) {
+      if (allowAdminBypass && (await isStaffUser(req.user.id))) {
         const { data: anyOwnership } = await supabaseAdmin
           .from("vm_ownership")
           .select("vmid, node, customer_id")

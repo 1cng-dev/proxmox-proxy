@@ -1,5 +1,5 @@
 const supabaseAdmin = require("../supabaseClient");
-const { isAdminUser } = require("../utils/isAdmin");
+const { isStaffUser } = require("../utils/isAdmin");
 
 // Customer-facing counterpart to authorizeVm.js. Resolves (vmid, node) from
 // vm_ownership.id (an opaque UUID, req.params.recordId) instead of the raw
@@ -29,7 +29,7 @@ function authorizeVmByRecord({ allowAdminBypass = false } = {}) {
         throw err;
       }
 
-      const admin = allowAdminBypass && (await isAdminUser(req.user.id));
+      const admin = allowAdminBypass && (await isStaffUser(req.user.id));
 
       let query = supabaseAdmin
         .from("vm_ownership")

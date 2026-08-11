@@ -10,40 +10,23 @@ const auditLog = require("../middleware/auditLog");
 const vmActionLimiter = require("../middleware/vmActionLimiter");
 const vncSessions = require("../vncSessions");
 const { cleanVmid } = require("../utils/vmid");
-const { isAdminUser } = require("../utils/isAdmin");
+const { isStaffUser } = require("../utils/isAdmin");
 const { withNodeFailover, logVmOperation } = require("../utils/nodeFailover");
 const { nodeFromUpid } = require("../utils/upid");
 
 // ─── GET /api/vms (or /api/nodes/:node/vms) ───────────
-// Customers get only the VMs they own (per vm_ownership) — a node-wide
-// listing would leak other tenants' VM IDs. Admins (per team_members) get
-// every VM on the cluster, read-only, regardless of ownership.
+// Customers see only the VMs they own. Staff (Admin, Sales, Finance,
+// Engineer) see all customer VMs listed in vm_ownership.
 router.get("/", authenticate, async (req, res, next) => {
   try {
-    if (await isAdminUser(req.user.id)) {
-      const { data } = await proxmox.get("/cluster/resources", { params: { type: "vm" } });
-      const results = (data.data || []).map((r) => ({
-        vmid: r.vmid,
-        node: r.node,
-        name: r.name,
-        status: r.status,
-        cpu: r.cpu,
-        maxcpu: r.maxcpu,
-        mem: r.mem,
-        maxmem: r.maxmem,
-        disk: r.disk,
-        maxdisk: r.maxdisk,
-        uptime: r.uptime,
-        netin: r.netin,
-        netout: r.netout,
-      }));
-      return res.json({ ok: true, scope: "all", data: results });
+    const isStaff = await isStaffUser(req.user.id);
+
+    let query = supabaseAdmin.from("vm_ownership").select("vmid, node");
+    if (!isStaff) {
+      query = query.eq("user_id", req.user.id);
     }
 
-    const { data: owned, error } = await supabaseAdmin
-      .from("vm_ownership")
-      .select("vmid, node")
-      .eq("user_id", req.user.id);
+    const { data: owned, error } = await query;
 
     if (error) throw error;
 
@@ -57,7 +40,7 @@ router.get("/", authenticate, async (req, res, next) => {
       )
     );
 
-    res.json({ ok: true, scope: "owned", data: results });
+    res.json({ ok: true, scope: isStaff ? "staff" : "owned", data: results });
   } catch (err) {
     next(err);
   }

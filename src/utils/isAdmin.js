@@ -22,6 +22,13 @@ async function isAdminUser(userId) {
   return (await getActiveTeamRole(userId)) === "Admin";
 }
 
+const STAFF_ROLES = ["Admin", "Sales", "Finance", "Engineer"];
+
+async function isStaffUser(userId) {
+  const role = await getActiveTeamRole(userId);
+  return STAFF_ROLES.includes(role);
+}
+
 // Provisioning-specific, not a general admin/engineer merge: engineers are
 // the ones actually running the Proxmox provisioning, so they (along with
 // admins) may bind the result to a customer's VM record. Used only by
@@ -33,4 +40,4 @@ async function isVMProvisioner(userId) {
   return role === "Admin" || role === "Engineer";
 }
 
-module.exports = { isAdminUser, isVMProvisioner, getActiveTeamRole };
+module.exports = { isAdminUser, isStaffUser, isVMProvisioner, getActiveTeamRole };
