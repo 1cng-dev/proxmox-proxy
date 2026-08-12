@@ -10,6 +10,7 @@ const auditRouter = require("./routes/audit");
 const errorHandler = require("./errorHandler");
 const { handleConsoleUpgrade } = require("./wsConsoleProxy");
 const vmStatusSync = require("./jobs/syncVmStatus");
+const auditLogRetention = require("./jobs/auditLogRetention");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -39,6 +40,8 @@ app.get("/health", (req, res) => {
     service: "proxmox-proxy",
     proxmox: process.env.PROXMOX_URL,
     defaultNode: process.env.PROXMOX_DEFAULT_NODE,
+    sync: vmStatusSync.getHealth(),
+    retention: auditLogRetention.getHealth(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -125,4 +128,5 @@ server.listen(PORT, () => {
   console.log("  WS   /ws/console/:sessionToken\n");
 
   vmStatusSync.start();
+  auditLogRetention.start();
 });
