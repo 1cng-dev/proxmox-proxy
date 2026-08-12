@@ -6,6 +6,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const nodesRouter = require("./routes/nodes");
 const vmsRouter = require("./routes/vms");
+const auditRouter = require("./routes/audit");
 const errorHandler = require("./errorHandler");
 const { handleConsoleUpgrade } = require("./wsConsoleProxy");
 const vmStatusSync = require("./jobs/syncVmStatus");
@@ -83,6 +84,9 @@ app.use("/api/vms", (req, res, next) => {
 
 // Specific node route
 app.use("/api/nodes/:node/vms", vmsRouter);
+
+// Audit logs — staff only
+app.use("/api/admin/audit-logs", auditRouter);
 
 // ─── Error Handler ────────────────────────────────────
 app.use(errorHandler);
