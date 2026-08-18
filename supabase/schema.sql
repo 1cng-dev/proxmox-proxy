@@ -32,14 +32,20 @@ create policy "Users can view own vm ownership"
 
 create table if not exists public.vm_action_audit (
   id bigserial primary key,
-  user_id uuid not null,
+  user_id uuid,
+  actor text,
+  source text not null default 'vmp-ui',
   vmid integer not null,
   node text not null,
-  action text not null,   -- start | stop | shutdown | reboot | delete | console
+  action text not null,   -- start | stop | shutdown | reboot | delete | console | admin_bindings_set
   result text not null,   -- success | error
   ip_address text,
+  proxmox_task_id text,
+  started_at timestamptz,
   created_at timestamptz not null default now()
 );
 
 create index if not exists idx_vm_action_audit_vmid on public.vm_action_audit(vmid, node);
 create index if not exists idx_vm_action_audit_user on public.vm_action_audit(user_id);
+create index if not exists idx_vm_action_audit_proxmox_task on public.vm_action_audit(proxmox_task_id);
+create index if not exists idx_vm_action_audit_source on public.vm_action_audit(source, created_at desc);

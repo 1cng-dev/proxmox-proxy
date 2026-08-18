@@ -114,12 +114,13 @@ router.post("/vms/:vmId/bindings", authenticate, requireVMProvisioner, async (re
     // this stays accurate even if the user's role changes later.
     await supabaseAdmin.from("vm_action_audit").insert({
       user_id: req.user.id,
+      actor: req.user?.email || null,
+      source: "vmp-ui",
       vmid,
       node,
       action: "admin_bindings_set",
       result: "success",
       ip_address: req.ip,
-      performed_by_role: req.teamRole,
     });
 
     res.json({ ok: true, vmId, vmid, node });

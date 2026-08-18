@@ -12,6 +12,8 @@ function auditLog(action) {
       Promise.resolve(
         supabaseAdmin.from("vm_action_audit").insert({
           user_id: req.user?.id || null,
+          actor: req.user?.email || req.user?.id || null,
+          source: "vmp-ui",
           vmid: parseInt(cleanVmid(req.params.vmid || "0"), 10),
           node: req.params.node || null,
           action,

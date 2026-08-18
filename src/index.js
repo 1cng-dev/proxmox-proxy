@@ -7,9 +7,11 @@ const morgan = require("morgan");
 const nodesRouter = require("./routes/nodes");
 const vmsRouter = require("./routes/vms");
 const adminRouter = require("./routes/admin");
+const auditRouter = require("./routes/audit");
 const errorHandler = require("./errorHandler");
 const { handleConsoleUpgrade } = require("./wsConsoleProxy");
 const vmStatusSync = require("./jobs/syncVmStatus");
+const proxmoxTaskAudit = require("./jobs/proxmoxTaskAudit");
 const proxmoxClient = require("./proxmoxClient");
 const { assertVmCredentialKey } = require("./utils/assertEnv");
 
@@ -46,6 +48,7 @@ app.get("/health", (req, res) => {
     defaultNode: process.env.PROXMOX_DEFAULT_NODE,
     timestamp: new Date().toISOString(),
     syncVmStatus: vmStatusSync.getHealth(),
+    proxmoxTaskAudit: proxmoxTaskAudit.getHealth(),
     proxmoxCircuit: proxmoxClient.getCircuitState(),
   });
 });
@@ -105,6 +108,7 @@ app.use("/api/vms", (req, res, next) => {
 app.use("/api/nodes/:node/vms", vmsRouter);
 
 app.use("/api/admin", adminRouter);
+app.use("/api/admin/audit-logs", auditRouter);
 
 // ─── 404 (no route matched) ───────────────────────────
 // Express's own default 404 is a plain text/html page with no JSON body —
@@ -155,7 +159,9 @@ server.listen(PORT, () => {
   console.log("  GET  /api/vms/:vmid/task/:upid");
   console.log("  GET  /api/vms/by-record/:recordId  (+ stats/credentials/console/task, POST power actions)");
   console.log("  POST /api/admin/vms/:vmId/bindings  (admin role required)");
+  console.log("  GET  /api/admin/audit-logs");
   console.log("  WS   /ws/console/:sessionToken\n");
 
   vmStatusSync.start();
+  proxmoxTaskAudit.start();
 });
